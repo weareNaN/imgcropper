@@ -385,7 +385,7 @@ function updateButtons() {
   const ready = !!state.source && !state.busy;
   uploadBtn.disabled = !ready;
   downloadBtn.disabled = !ready;
-  downloadBtn.textContent = `Download ${transparentOutput() ? 'PNG' : 'JPEG'} instead`;
+  downloadBtn.textContent = `Download ${transparentOutput() ? 'PNG' : 'JPEG'}`;
 }
 
 new ResizeObserver(layout).observe(stage);
