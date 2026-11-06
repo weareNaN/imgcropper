@@ -13,7 +13,7 @@
  *   2. A custom header is required. Browsers can't send it cross-site without a CORS
  *      preflight, which this script only approves for allowed_origin.
  *   3. Per-IP rate limit (rate_limit_per_hour).
- *   4. Only JPEGs no wider than 1280 px (what the app produces) are accepted, so it can't be
+ *   4. Only JPEG/PNG images no wider than 1280 px (what the app produces) are accepted, so it can't be
  *      used to host arbitrary or large files. Cloudinary parameters are fixed server-side.
  * A determined attacker with curl can fake 1 and 2; 3 and 4 cap what they can do.
  */
@@ -144,8 +144,9 @@ if ($file['size'] > $maxBytes) {
     respond(413, ['error' => 'File is too large.']);
 }
 $info = @getimagesize($file['tmp_name']);
-if ($info === false || $info[2] !== IMAGETYPE_JPEG) {
-    respond(415, ['error' => 'Only JPEG images are accepted.']);
+// JPEG normally; PNG when the user keeps transparency.
+if ($info === false || !in_array($info[2], [IMAGETYPE_JPEG, IMAGETYPE_PNG], true)) {
+    respond(415, ['error' => 'Only JPEG or PNG images are accepted.']);
 }
 // The app never sends anything wider than 1280 px; the height cap allows very tall free-form crops.
 if ($info[0] < 1 || $info[0] > 1280 || $info[1] < 1 || $info[1] > 16000) {
@@ -176,7 +177,7 @@ ksort($params);
 $toSign = implode('&', array_map(fn($k, $v) => "$k=$v", array_keys($params), $params));
 $params['signature'] = sha1($toSign . $config['api_secret']);
 $params['api_key']   = $config['api_key'];
-$params['file']      = new CURLFile($file['tmp_name'], 'image/jpeg', $name . '.jpg');
+$params['file']      = new CURLFile($file['tmp_name'], $info['mime'], $name . ($info[2] === IMAGETYPE_PNG ? '.png' : '.jpg'));
 
 $endpoint = 'https://api.cloudinary.com/v1_1/' . rawurlencode((string) $config['cloud_name']) . '/image/upload';
 $ch = curl_init($endpoint);

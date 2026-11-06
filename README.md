@@ -28,7 +28,7 @@ There is no password. `upload.php` uses layered checks instead, so the endpoint 
 - **Same site only.** The request's `Origin` (or `Referer`) must be the site hosting the app. This stops other websites from using your endpoint through their visitors' browsers.
 - **A custom header is required** (`X-Requested-With: imgcropper`). Browsers can't send it from another site unless the server approves, and it only does so for `allowed_origin`.
 - **Per-IP rate limit:** 60 uploads an hour by default. Counters are stored in `api/.ratelimit/`, which blocks web access to itself.
-- **Strict uploads:** only JPEGs at most 1280px wide and 10 MB, which is exactly what the app produces. All Cloudinary options (folder, naming, no overwriting) are fixed on the server, and the API secret never leaves it.
+- **Strict uploads:** only JPEG or PNG images at most 1280px wide and 10 MB, which is exactly what the app produces. All Cloudinary options (folder, naming, no overwriting) are fixed on the server, and the API secret never leaves it.
 - **Kept out of search engines** with `noindex` (meta tag and `X-Robots-Tag` header) and a `robots.txt` that disallows everything.
 
 Someone who finds the URL and scripts requests with `curl` can fake the first two checks. They would still be limited to small JPEGs, at the rate limit, into your folder. For a tool on an obscure host that's a reasonable trade-off. If you ever need more, put the site behind your host's password protection (HTTP basic auth); your browser then remembers the login.
@@ -85,7 +85,7 @@ The sidebar's **Colour** row shows what was detected, for example "Adobe RGB (19
 ## Notes and limits
 
 - Downscaling is done in successive halvings on canvas for clean, alias-free results.
-- EXIF orientation (and the TIFF orientation tag) is applied automatically. Transparent areas are filled with #F9F9F9 by default. A small **Background** row (swatch and hex field) appears under Dimensions only for images with transparency; your choice is remembered, and "reset" returns to #F9F9F9. The preview shows the fill live.
+- EXIF orientation (and the TIFF orientation tag) is applied automatically. Transparent areas are filled with #F9F9F9 by default. A small **Background** row (swatch and hex field) appears under Dimensions only for images with transparency; your choice is remembered, and "reset" returns to #F9F9F9. The preview shows the fill live. Tick **transparent** in that row to keep the transparency instead. The output is then a PNG, tagged sRGB, because JPEG can't store transparency; PNG works in all email clients, unlike WebP, but files are larger.
 - TIFF support comes from the bundled [UTIF.js](https://github.com/photopea/UTIF.js): uncompressed, LZW, Deflate, PackBits and JPEG compression; 8- and 16-bit RGB, Gray and CMYK, with or without alpha. Exotic TIFFs (32-bit float, planar CMYK) may not decode or may not be colour-converted; a warning is shown in that case.
 - HEIC and AVIF open only where the browser supports them (HEIC: Safari), and use the browser's colour management.
 - Very large images use a lot of memory (about 4 bytes per pixel, so a 100-megapixel image needs about 400 MB). Desktop browsers handle this fine.

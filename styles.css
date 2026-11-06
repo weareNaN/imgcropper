@@ -268,6 +268,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .bg-row input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 .bg-row input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 3px; }
 .bg-row input[type="color"]::-moz-color-swatch { border: 0; border-radius: 3px; }
+.bg-keep { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.bg-keep input { width: auto; margin: 0; accent-color: var(--accent); }
 button.link { background: none; border: 0; padding: 0; color: var(--muted); font-size: 11px; text-decoration: underline; }
 button.link:hover:not(:disabled) { background: none; color: var(--text); }
 

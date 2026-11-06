@@ -8,7 +8,7 @@ const MAX_CANVAS_AREA = 16_000_000; // stay below Safari's ~16.7MP canvas limit
 const MIN_CROP_DISPLAY_PX = 16;  // minimum crop size, in screen pixels
 const HISTORY_MAX = 12;
 const DEFAULT_BG = '#f9f9f9'; // fill for transparent pixels (JPEG has no alpha)
-const LS = { bg: 'cropper.bg', ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
+const LS = { bg: 'cropper.bg', keepAlpha: 'cropper.keepAlpha', ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -17,6 +17,7 @@ const cropEl = $('crop'), shadeEl = $('shade'), busy = $('busy'), busyText = $('
 const fileInput = $('fileInput'), newBtn = $('newBtn');
 const ratiosEl = $('ratios'), customRow = $('customRow'), customW = $('customW'), customH = $('customH'), swapBtn = $('swapBtn');
 const dimColor = $('dimColor'), colorWarn = $('colorWarn');
+const bgKeep = $('bgKeep'), bgColorControls = $('bgColorControls');
 const bgLabel = $('bgLabel'), bgRow = $('bgRow'), bgPicker = $('bgPicker'), bgHex = $('bgHex'), bgReset = $('bgReset');
 const dimSource = $('dimSource'), dimCrop = $('dimCrop'), dimOut = $('dimOut'), dimWarn = $('dimWarn');
 const uploadBtn = $('uploadBtn'), downloadBtn = $('downloadBtn'), progress = $('progress'), progressBar = $('progressBar');
@@ -27,6 +28,7 @@ const historyPanel = $('historyPanel'), historyEl = $('history');
 const state = {
   bg: /^#[0-9a-f]{6}$/.test(localStorage.getItem('cropper.bg') || '') ? localStorage.getItem('cropper.bg') : DEFAULT_BG,
   hasAlpha: false,
+  keepAlpha: localStorage.getItem('cropper.keepAlpha') === '1', // export PNG with transparency instead of flattening
   previewRaw: null, // unflattened preview (keeps transparency) so the background can be changed live
   source: null,   // full-resolution ImageBitmap / HTMLImageElement
   W: 0, H: 0,     // source size
@@ -181,10 +183,15 @@ function hasTransparency(canvas) {
 function renderPreview() {
   if (!state.previewRaw) return;
   const ctx = previewCanvas.getContext('2d', { colorSpace: 'srgb' });
-  ctx.fillStyle = state.bg;
-  ctx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+  ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+  if (!state.keepAlpha) { // transparent output: the stage's checkerboard shows through instead
+    ctx.fillStyle = state.bg;
+    ctx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+  }
   ctx.drawImage(state.previewRaw, 0, 0);
   bgLabel.hidden = bgRow.hidden = !state.hasAlpha;
+  bgKeep.checked = state.keepAlpha;
+  bgColorControls.hidden = state.keepAlpha;
   bgPicker.value = state.bg;
   bgHex.value = state.bg.toUpperCase();
   bgReset.hidden = state.bg === DEFAULT_BG;
@@ -204,6 +211,15 @@ bgPicker.addEventListener('input', () => setBackground(bgPicker.value));
 bgHex.addEventListener('change', () => setBackground(bgHex.value));
 bgHex.addEventListener('keydown', (e) => { if (e.key === 'Enter') bgHex.blur(); });
 bgReset.addEventListener('click', () => setBackground(DEFAULT_BG));
+bgKeep.addEventListener('change', () => {
+  state.keepAlpha = bgKeep.checked;
+  if (state.keepAlpha) localStorage.setItem(LS.keepAlpha, '1'); else localStorage.removeItem(LS.keepAlpha);
+  renderPreview();
+  updateInfo();
+});
+
+// Transparent output only when the image actually has transparency and the user asked for it.
+const transparentOutput = () => state.hasAlpha && state.keepAlpha;
 
 // ---------- Loading an image ----------
 async function openFile(file) {
@@ -315,7 +331,7 @@ function updateInfo() {
   const o = outputRect();
   dimSource.textContent = `${state.W} × ${state.H}`;
   dimCrop.textContent = `${o.cw} × ${o.ch}`;
-  dimOut.textContent = `${o.ow} × ${o.oh}`;
+  dimOut.textContent = `${o.ow} × ${o.oh}` + (transparentOutput() ? ' · PNG' : '');
   renderColorInfo();
   if (o.cw < MAX_OUT_WIDTH) {
     dimWarn.hidden = false;
@@ -567,17 +583,53 @@ window.addEventListener('paste', (e) => {
 // ---------- Export ----------
 async function renderOutput() {
   const o = outputRect();
-  const canvas = resample(state.source, o.cx, o.cy, o.cw, o.ch, o.ow, o.oh, state.bg);
+  const png = transparentOutput();
+  const canvas = resample(state.source, o.cx, o.cy, o.cw, o.ch, o.ow, o.oh, png ? null : state.bg);
+  const type = png ? 'image/png' : 'image/jpeg';
   const blob = await new Promise((res, rej) =>
-    canvas.toBlob((b) => (b ? res(b) : rej(new Error('JPEG encoding failed'))), 'image/jpeg', JPEG_QUALITY));
+    canvas.toBlob((b) => (b ? res(b) : rej(new Error('Image encoding failed'))), type, png ? undefined : JPEG_QUALITY));
   canvas.width = canvas.height = 0;
-  return { blob: await tagAsSRGB(blob), w: o.ow, h: o.oh };
+  return { blob: await (png ? tagPngAsSRGB(blob) : tagAsSRGB(blob)), w: o.ow, h: o.oh, ext: png ? 'png' : 'jpg' };
 }
 
 // Pixels are already sRGB; this embeds a compact sRGB v2 ICC profile so every viewer reads
 // them as sRGB. Browsers differ here (Chrome embeds its own profile, others may embed nothing),
 // so any existing ICC segment is replaced to make the output identical everywhere.
 let srgbIccPromise = null;
+// PNG equivalent: drop any colour chunks the browser wrote (iCCP/sRGB/gAMA/cHRM) and add the
+// standard 1-byte sRGB chunk right after IHDR.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+async function tagPngAsSRGB(blob) {
+  const png = new Uint8Array(await blob.arrayBuffer());
+  const dv = new DataView(png.buffer);
+  const parts = [png.subarray(0, 8)];
+  let i = 8;
+  while (i + 12 <= png.length) {
+    const len = dv.getUint32(i), type = String.fromCharCode(...png.subarray(i + 4, i + 8));
+    const chunk = png.subarray(i, i + 12 + len);
+    if (!['iCCP', 'sRGB', 'gAMA', 'cHRM'].includes(type)) parts.push(chunk);
+    if (type === 'IHDR') {
+      const srgb = new Uint8Array(13); // length(4) + "sRGB" + intent(1, perceptual) + crc(4)
+      const sdv = new DataView(srgb.buffer);
+      sdv.setUint32(0, 1);
+      srgb.set([0x73, 0x52, 0x47, 0x42, 0], 4);
+      sdv.setUint32(9, crc32(srgb.subarray(4, 9)));
+      parts.push(srgb);
+    }
+    i += 12 + len;
+  }
+  return new Blob(parts, { type: 'image/png' });
+}
+
 async function tagAsSRGB(blob) {
   srgbIccPromise ||= fetch('vendor/sRGB-v2-micro.icc').then((r) => {
     if (!r.ok) throw new Error('sRGB profile missing');
@@ -610,9 +662,9 @@ async function tagAsSRGB(blob) {
   return new Blob([jpg.subarray(0, 2), ...keep, jpg.subarray(i)], { type: 'image/jpeg' });
 }
 
-function outputName(w) {
+function outputName(w, ext = 'jpg') {
   const base = (state.fileName || 'image').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
-  return `${base}-${w}w.jpg`;
+  return `${base}-${w}w.${ext}`;
 }
 
 downloadBtn.addEventListener('click', async () => {
@@ -620,10 +672,10 @@ downloadBtn.addEventListener('click', async () => {
   setBusy('Rendering…');
   try {
     await new Promise(requestAnimationFrame);
-    const { blob, w } = await renderOutput();
+    const { blob, w, ext } = await renderOutput();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = outputName(w);
+    a.download = outputName(w, ext);
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   } catch (err) {
@@ -673,7 +725,7 @@ async function upload() {
   setBusy('Rendering…');
   try {
     await new Promise(requestAnimationFrame);
-    const { blob, w, h } = await renderOutput();
+    const { blob, w, h, ext } = await renderOutput();
     setBusy(null);
     uploadBtn.disabled = downloadBtn.disabled = true;
     state.busy = true;
@@ -681,7 +733,7 @@ async function upload() {
     progressBar.style.width = '0%';
     setStatus(`Uploading ${(blob.size / 1024).toFixed(0)} KB…`);
 
-    const data = await uploadToBackend(blob, outputName(w), (f) => { progressBar.style.width = (f * 100).toFixed(1) + '%'; });
+    const data = await uploadToBackend(blob, outputName(w, ext), (f) => { progressBar.style.width = (f * 100).toFixed(1) + '%'; });
     const url = data.url;
 
     resultUrl.value = url;
