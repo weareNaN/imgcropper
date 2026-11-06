@@ -1,0 +1,4 @@
+# Block direct web access to the config and example files (Apache 2.4+).
+<FilesMatch "^config(\.example)?\.php$">
+    Require all denied
+</FilesMatch>

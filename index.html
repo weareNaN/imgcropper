@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Image Cropper → Cloudinary</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Crop<span>→</span>Cloudinary</h1>
+    <div class="topbar-actions">
+      <button id="newBtn" class="ghost" hidden>New image</button>
+      <button id="settingsBtn" class="ghost" title="Upload settings">⚙ Settings</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section id="stage" class="stage">
+      <div id="dropzone" class="dropzone">
+        <div class="dropzone-inner">
+          <div class="dropzone-icon">⤓</div>
+          <p><strong>Drop an image here</strong></p>
+          <p class="muted">JPG, PNG, WebP, TIFF, etc. Nothing is uploaded until you click Upload.</p>
+          <label class="button">Choose file<input id="fileInput" type="file" accept="image/*,.tif,.tiff" hidden /></label>
+          <p class="muted small">You can also paste an image with ⌘V / Ctrl+V.</p>
+        </div>
+      </div>
+
+      <div id="frame" class="frame" hidden>
+        <canvas id="preview"></canvas>
+        <div class="shade-clip"><div id="shade" class="shade"></div></div>
+        <div id="crop" class="crop">
+          <div class="grid"></div>
+          <div class="handle" data-h="nw"></div>
+          <div class="handle" data-h="n"></div>
+          <div class="handle" data-h="ne"></div>
+          <div class="handle" data-h="e"></div>
+          <div class="handle" data-h="se"></div>
+          <div class="handle" data-h="s"></div>
+          <div class="handle" data-h="sw"></div>
+          <div class="handle" data-h="w"></div>
+        </div>
+      </div>
+
+      <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busyText">Loading…</span></div>
+      <div id="dragOverlay" class="drag-overlay" hidden>Drop to open</div>
+    </section>
+
+    <aside class="sidebar">
+      <div class="panel">
+        <h2>Aspect ratio</h2>
+        <div id="ratios" class="ratios">
+          <button data-ratio="4:5">4:5</button>
+          <button data-ratio="1:1">1:1</button>
+          <button data-ratio="5:4">5:4</button>
+          <button data-ratio="free">Free</button>
+          <button data-ratio="custom">Custom</button>
+        </div>
+        <div id="customRow" class="custom-row" hidden>
+          <input id="customW" type="number" min="0.01" step="any" value="16" aria-label="Ratio width" />
+          <span>:</span>
+          <input id="customH" type="number" min="0.01" step="any" value="9" aria-label="Ratio height" />
+          <button id="swapBtn" class="ghost" title="Swap width and height">⇄</button>
+        </div>
+        <p class="muted small">Drag to move · handles to resize · double-click to maximize · arrow keys to nudge (Shift for ×10)</p>
+      </div>
+
+      <div class="panel">
+        <h2>Dimensions</h2>
+        <dl class="dims">
+          <dt>Source</dt><dd id="dimSource">—</dd>
+          <dt>Crop</dt><dd id="dimCrop">—</dd>
+          <dt>Output</dt><dd id="dimOut">—</dd>
+        </dl>
+        <p id="dimWarn" class="warn small" hidden></p>
+      </div>
+
+      <div class="panel">
+        <button id="uploadBtn" class="primary" disabled>Upload to Cloudinary</button>
+        <button id="downloadBtn" class="ghost full" disabled>Download JPEG instead</button>
+        <div id="progress" class="progress" hidden><div id="progressBar"></div></div>
+        <p id="status" class="small"></p>
+        <div id="result" class="result" hidden>
+          <label class="small muted" for="resultUrl">URL (copied to clipboard)</label>
+          <div class="url-row">
+            <input id="resultUrl" type="text" readonly />
+            <button id="copyBtn">Copy</button>
+          </div>
+          <a id="openLink" class="small" href="#" target="_blank" rel="noopener">Open in new tab ↗</a>
+        </div>
+      </div>
+
+      <div class="panel" id="historyPanel" hidden>
+        <h2>Recent uploads</h2>
+        <ul id="history" class="history"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="settings">
+    <form method="dialog" id="settingsForm">
+      <h2>Upload settings</h2>
+      <p class="muted small">Saved only in this browser (localStorage). Cloudinary credentials and the folder are configured on the server in <code>api/config.php</code>.</p>
+      <label>Upload endpoint<input id="cfgEndpoint" required autocomplete="off" placeholder="api/upload.php" /></label>
+      <label>Access key<input id="cfgKey" type="password" required autocomplete="off" placeholder="the access_key from config.php" /></label>
+      <div class="dialog-actions">
+        <button value="cancel" formnovalidate class="ghost">Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
