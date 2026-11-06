@@ -226,7 +226,7 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 /* Ratios */
 .ratios {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
 }
 .ratios button.active {
@@ -241,6 +241,9 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   margin-top: 10px;
 }
 .custom-row input { width: 70px; text-align: center; }
+.custom-row .approx { color: var(--muted); font-size: 16px; width: 12px; text-align: center; flex: none; }
+.custom-row .lock { width: 12px; height: 12px; color: var(--muted); flex: none; display: flex; }
+.custom-row .lock svg { width: 12px; height: 12px; }
 .custom-row button { padding: 6px 10px; }
 
 /* Dimensions */

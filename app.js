@@ -9,13 +9,14 @@ const MAX_CANVAS_AREA = 16_000_000; // stay below Safari's ~16.7MP canvas limit
 const MIN_CROP_DISPLAY_PX = 16;  // minimum crop size, in screen pixels
 const HISTORY_MAX = 12;
 const DEFAULT_BG = '#f9f9f9'; // fill for transparent pixels (JPEG has no alpha)
-const LS = { ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
+const LS = { ratio: 'cropper.ratio', history: 'cropper.history' };
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), dropzone = $('dropzone'), frame = $('frame'), previewCanvas = $('preview');
 const cropEl = $('crop'), shadeEl = $('shade'), busy = $('busy'), busyText = $('busyText'), dragOverlay = $('dragOverlay');
 const fileInput = $('fileInput'), newBtn = $('newBtn');
+const approxSign = $('approxSign'), lockSign = $('lockSign');
 const ratiosEl = $('ratios'), customRow = $('customRow'), customW = $('customW'), customH = $('customH'), swapBtn = $('swapBtn');
 const dimColor = $('dimColor'), colorWarn = $('colorWarn');
 const bgLabel = $('bgLabel'), bgRow = $('bgRow'), bgPicker = $('bgPicker'), bgTransparent = $('bgTransparent');
@@ -35,30 +36,35 @@ const state = {
   W: 0, H: 0,     // source size
   fileName: '',
   crop: { x: 0, y: 0, w: 0, h: 0 }, // in source pixels
-  ratioKey: localStorage.getItem(LS.ratio) || '4:5',
+  ratio: loadRatio(), // null = Free (unlocked), or { w, h } = locked ratio (a preset or anything typed)
   scale: 1,       // screen px per source px
   busy: false,
 };
 
-const custom = JSON.parse(localStorage.getItem(LS.custom) || '{"w":16,"h":9}');
-customW.value = custom.w;
-customH.value = custom.h;
 
 // ---------- Helpers ----------
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
-function currentRatio() {
-  switch (state.ratioKey) {
-    case 'free': return null;
-    case 'custom': {
-      const w = parseFloat(customW.value), h = parseFloat(customH.value);
-      return w > 0 && h > 0 ? w / h : null;
-    }
-    default: {
-      const [w, h] = state.ratioKey.split(':').map(Number);
-      return w / h;
-    }
+function parseRatio(text) {
+  if (text === 'free') return null;
+  const [w, h] = String(text || '').split(':').map(Number);
+  return w > 0 && h > 0 ? { w, h } : undefined;
+}
+
+// Saved as 'free' or 'w:h'. Older versions saved 'custom' + a separate custom ratio.
+function loadRatio() {
+  let saved = localStorage.getItem('cropper.ratio');
+  if (saved === 'custom') {
+    try { const c = JSON.parse(localStorage.getItem('cropper.custom')); saved = `${c.w}:${c.h}`; } catch { saved = null; }
+    if (saved) localStorage.setItem('cropper.ratio', saved); else localStorage.removeItem('cropper.ratio');
   }
+  localStorage.removeItem('cropper.custom');
+  const r = parseRatio(saved);
+  return r === undefined ? { w: 4, h: 5 } : r;
+}
+
+function currentRatio() {
+  return state.ratio ? state.ratio.w / state.ratio.h : null;
 }
 
 function setBusy(text) {
@@ -320,6 +326,7 @@ function updateInfo() {
     dimSource.textContent = dimCrop.textContent = dimOut.textContent = dimColor.textContent = '—';
     dimColor.className = '';
     dimWarn.hidden = colorWarn.hidden = true;
+    updateFreeReadout();
     updateButtons();
     return;
   }
@@ -327,6 +334,7 @@ function updateInfo() {
   dimSource.textContent = `${state.W} × ${state.H}`;
   dimCrop.textContent = `${o.cw} × ${o.ch}`;
   dimOut.textContent = `${o.ow} × ${o.oh}` + (transparentOutput() ? ' · PNG' : '');
+  updateFreeReadout();
   renderColorInfo();
   if (o.cw < MAX_OUT_WIDTH) {
     dimWarn.hidden = false;
@@ -370,9 +378,51 @@ function updateButtons() {
 new ResizeObserver(layout).observe(stage);
 
 // ---------- Ratio ----------
+const isTyping = () => document.activeElement === customW || document.activeElement === customH;
+
+// One control for every ratio: preset buttons + the W : H boxes. The boxes show the locked ratio,
+// or (in Free mode) a live "≈" readout of the crop. Typing in them locks that ratio.
 function renderRatioButtons() {
-  ratiosEl.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.ratio === state.ratioKey));
-  customRow.hidden = state.ratioKey !== 'custom';
+  const r = currentRatio();
+  ratiosEl.querySelectorAll('button').forEach((b) => {
+    const p = parseRatio(b.dataset.ratio);
+    b.classList.toggle('active', p === null ? r === null : r !== null && Math.abs(p.w / p.h - r) < 1e-9);
+  });
+  approxSign.hidden = r !== null;
+  lockSign.hidden = r === null;
+  customRow.title = r === null ? 'Current ratio of your crop. Type a ratio to lock it.' : 'Locked ratio. Type to change it, or click Free to unlock.';
+  if (r === null) updateFreeReadout();
+  else if (!isTyping()) { customW.value = state.ratio.w; customH.value = state.ratio.h; }
+}
+
+function setRatio(ratio) {
+  state.ratio = ratio;
+  localStorage.setItem(LS.ratio, ratio ? `${ratio.w}:${ratio.h}` : 'free');
+  renderRatioButtons();
+  applyRatio();
+}
+
+// Common ratios shown by name when the free crop is within 1% of one; otherwise "1.43 : 1".
+const COMMON_RATIOS = [[1, 1], [4, 5], [5, 4], [3, 2], [2, 3], [4, 3], [3, 4], [16, 9], [9, 16], [16, 10], [10, 16],
+  [2, 1], [1, 2], [3, 1], [1, 3], [21, 9], [9, 21], [5, 7], [7, 5], [1.91, 1], [1, 1.91]];
+function approxRatio(r) {
+  let best = null, bestErr = 0.01;
+  for (const [w, h] of COMMON_RATIOS) {
+    const err = Math.abs(w / h - r) / r;
+    if (err < bestErr) { best = [w, h]; bestErr = err; }
+  }
+  if (best) return best;
+  const round2 = (v) => Math.round(v * 100) / 100;
+  return r >= 1 ? [round2(r), 1] : [1, round2(1 / r)];
+}
+
+// Free mode: show the crop's ratio in the boxes (unless the user is typing in them).
+function updateFreeReadout() {
+  if (state.ratio || isTyping()) return;
+  if (!state.source || !state.crop.h) { customW.value = customH.value = ''; return; }
+  const [w, h] = approxRatio(state.crop.w / state.crop.h);
+  customW.value = w;
+  customH.value = h;
 }
 
 // Fit the largest crop with the current ratio, centred on the current crop centre.
@@ -396,22 +446,22 @@ function maximizeCrop() {
 
 ratiosEl.addEventListener('click', (e) => {
   const b = e.target.closest('button');
-  if (!b) return;
-  state.ratioKey = b.dataset.ratio;
-  localStorage.setItem(LS.ratio, state.ratioKey);
-  renderRatioButtons();
-  applyRatio();
+  if (b) setRatio(parseRatio(b.dataset.ratio));
 });
 
-function onCustomChange() {
-  localStorage.setItem(LS.custom, JSON.stringify({ w: customW.value, h: customH.value }));
-  if (state.ratioKey === 'custom') applyRatio();
+// Typing a valid ratio locks it (incomplete input is ignored until it's valid).
+function onRatioInput() {
+  const w = parseFloat(customW.value), h = parseFloat(customH.value);
+  if (w > 0 && h > 0) setRatio({ w, h });
 }
-customW.addEventListener('input', onCustomChange);
-customH.addEventListener('input', onCustomChange);
+customW.addEventListener('input', onRatioInput);
+customH.addEventListener('input', onRatioInput);
+// Leaving a box restores what's actually in effect (e.g. after clearing a box).
+customW.addEventListener('blur', () => setTimeout(renderRatioButtons));
+customH.addEventListener('blur', () => setTimeout(renderRatioButtons));
 swapBtn.addEventListener('click', () => {
-  [customW.value, customH.value] = [customH.value, customW.value];
-  onCustomChange();
+  const w = parseFloat(customW.value), h = parseFloat(customH.value);
+  if (w > 0 && h > 0) setRatio({ w: h, h: w });
 });
 
 renderRatioButtons();

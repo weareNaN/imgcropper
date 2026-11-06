@@ -56,12 +56,18 @@
           <button data-ratio="1:1">1:1</button>
           <button data-ratio="5:4">5:4</button>
           <button data-ratio="free">Free</button>
-          <button data-ratio="custom">Custom</button>
         </div>
-        <div id="customRow" class="custom-row" hidden>
-          <input id="customW" type="number" min="0.01" step="any" value="16" aria-label="Ratio width" />
+        <div id="customRow" class="custom-row">
+          <span id="approxSign" class="approx" title="Approximate ratio of your current crop" hidden>≈</span>
+          <span id="lockSign" class="lock" title="Ratio locked. Click Free to unlock." hidden>
+            <svg viewBox="0 0 16 16" aria-label="Ratio locked">
+              <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" />
+              <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.6" />
+            </svg>
+          </span>
+          <input id="customW" type="number" min="0.01" step="any" aria-label="Ratio width" />
           <span>:</span>
-          <input id="customH" type="number" min="0.01" step="any" value="9" aria-label="Ratio height" />
+          <input id="customH" type="number" min="0.01" step="any" aria-label="Ratio height" />
           <button id="swapBtn" class="ghost" title="Swap width and height">⇄</button>
         </div>
         <p class="muted small">Drag to move · handles to resize · double-click to maximize · arrow keys to nudge (Shift for ×10)</p>

@@ -3,7 +3,7 @@
 A web app for cropping huge images in the browser and uploading the result to Cloudinary at a width of 1280px. The frontend is static, and a single PHP file handles the upload.
 
 - Drop (or paste, or pick) any image: JPG, PNG, WebP, AVIF, GIF, or TIFF. Files of 100 MB+ are fine. The image is decoded locally, and nothing is uploaded until you click **Upload**.
-- Aspect ratio presets: **4:5**, **1:1**, **5:4**, **Free**, and **Custom** (any ratio, decimals allowed, such as `1.91:1`).
+- Aspect ratio: presets **4:5**, **1:1**, **5:4** and **Free**, plus W : H boxes for any other ratio (decimals allowed, such as `1.91 : 1`). In Free mode the boxes show the crop's current ratio.
 - Output is a JPEG at quality 90, **1280px wide**. Crops narrower than 1280px keep their own width and are never upscaled.
 - After uploading (through the PHP backend), the Cloudinary URL is copied to your clipboard. Recent uploads are listed in the sidebar.
 
@@ -61,7 +61,9 @@ PHP's built-in server serves both the app and the API. Note that the TIFF decode
 | Move crop | Drag inside the box, or use arrow keys (Shift = ×10) |
 | Resize | Drag the corner or edge handles |
 | New crop | Drag on the darkened area |
-| Maximize crop | Double-click the box |
+| Maximize crop | Double-click the image |
+| See the ratio in Free mode | Shown live in the W : H boxes (≈ 4:5, 16:9, 1.91:1, or a decimal like 1.43 : 1) |
+| Use any other ratio | Type it into the W : H boxes; a lock icon shows it's locked. ⇄ flips it, and Free unlocks it |
 | Upload | Button, or ⌘/Ctrl + Enter |
 
 ## Colour management
