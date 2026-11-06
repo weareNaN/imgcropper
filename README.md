@@ -61,6 +61,7 @@ PHP's built-in server serves both the app and the API. Note that the TIFF decode
 | Move crop | Drag inside the box, or use arrow keys (Shift = ×10) |
 | Resize | Drag the corner or edge handles |
 | New crop | Drag on the darkened area |
+| Change ratio | Keeps your selection's centre and size and only changes its shape (shrinks only if it wouldn't fit). Switching back returns to your selection. |
 | Maximize crop | Double-click the image |
 | See the ratio in Free mode | Shown live in the W : H boxes (≈ 4:5, 16:9, 1.91:1, or a decimal like 1.43 : 1) |
 | Use any other ratio | Type it into the W : H boxes; a lock icon shows it's locked. ⇄ flips it, and Free unlocks it |

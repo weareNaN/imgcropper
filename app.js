@@ -36,6 +36,7 @@ const state = {
   W: 0, H: 0,     // source size
   fileName: '',
   crop: { x: 0, y: 0, w: 0, h: 0 }, // in source pixels
+  anchor: null, // last manual selection, see rememberSelection()
   ratio: loadRatio(), // null = Free (unlocked), or { w, h } = locked ratio (a preset or anything typed)
   scale: 1,       // screen px per source px
   busy: false,
@@ -258,7 +259,7 @@ async function openFile(file) {
     newBtn.hidden = false;
     state.crop = { x: 0, y: 0, w, h };
     layout();
-    applyRatio();
+    maximizeCrop(); // new image: start with the largest crop for the current ratio
   } catch (err) {
     console.error(err);
     setStatus(err.message || 'Could not open this image.', 'error');
@@ -425,23 +426,43 @@ function updateFreeReadout() {
   customH.value = h;
 }
 
-// Fit the largest crop with the current ratio, centred on the current crop centre.
+// A crop with ratio r, centred where `base` is centred. By default it keeps base's area
+// (only the shape changes), shrinking only if that wouldn't fit in the image; with
+// maximize it's the largest crop that fits. Then it's nudged inside the image if needed.
+function fitRatio(r, base, maximize = false) {
+  const { W, H } = state;
+  const cx = base.x + base.w / 2, cy = base.y + base.h / 2;
+  let w, h;
+  if (maximize) {
+    w = Math.min(W, H * r);
+  } else {
+    w = Math.sqrt(base.w * base.h * r);
+    w = Math.min(w, W, H * r);
+  }
+  h = w / r;
+  return { x: clamp(cx - w / 2, 0, W - w), y: clamp(cy - h / 2, 0, H - h), w, h };
+}
+
+// The user's last manual selection (drag, resize, move, nudge, double-click or a new image).
+// Ratio changes always start from it, so trying ratios (or typing "16" on the way to "16:9")
+// never shrinks or drifts the selection: switching back returns to what the user chose.
+function rememberSelection() {
+  state.anchor = { ...state.crop };
+}
+
 function applyRatio() {
   if (!state.source) return;
   const r = currentRatio();
-  const { W, H, crop } = state;
-  if (r) {
-    const cx = crop.x + crop.w / 2, cy = crop.y + crop.h / 2;
-    const w = Math.min(W, H * r), h = w / r;
-    state.crop = { x: clamp(cx - w / 2, 0, W - w), y: clamp(cy - h / 2, 0, H - h), w, h };
-  }
+  if (r) state.crop = fitRatio(r, state.anchor || state.crop);
   renderCrop();
 }
 
 function maximizeCrop() {
   if (!state.source) return;
-  if (!currentRatio()) state.crop = { x: 0, y: 0, w: state.W, h: state.H };
-  applyRatio();
+  const r = currentRatio();
+  state.crop = r ? fitRatio(r, state.crop, true) : { x: 0, y: 0, w: state.W, h: state.H };
+  rememberSelection();
+  renderCrop();
 }
 
 ratiosEl.addEventListener('click', (e) => {
@@ -580,6 +601,7 @@ function endDrag() {
   if (!drag) return;
   // A click on the dark area without dragging keeps the existing crop.
   if (drag.mode === 'new' && !drag.moved) state.crop = drag.start;
+  else if (drag.moved) rememberSelection();
   drag = null;
   frame.classList.remove('dragging');
   renderCrop();
@@ -601,6 +623,7 @@ window.addEventListener('keydown', (e) => {
   const step = (e.shiftKey ? 10 : 1) / state.scale;
   const c = state.crop;
   state.crop = { ...c, x: clamp(c.x + d[0] * step, 0, state.W - c.w), y: clamp(c.y + d[1] * step, 0, state.H - c.h) };
+  rememberSelection();
   renderCrop();
 });
 
