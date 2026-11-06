@@ -211,7 +211,9 @@ function renderPreview() {
   ctx.drawImage(state.previewRaw, 0, 0);
   bgLabel.hidden = bgRow.hidden = !state.hasAlpha;
   bgPicker.value = state.bg;
-  bgPicker.title = `Fill with ${state.bg.toUpperCase()} (JPEG). Click to change.`;
+  bgPicker.title = state.keepAlpha
+    ? `Fill with ${state.bg.toUpperCase()} (JPEG). Click to select, double-click to change.`
+    : `Fill with ${state.bg.toUpperCase()} (JPEG). Click to change.`;
   bgPicker.classList.toggle('selected', !state.keepAlpha);
   bgTransparent.classList.toggle('selected', state.keepAlpha);
   bgTransparent.setAttribute('aria-pressed', String(state.keepAlpha));
@@ -224,8 +226,13 @@ function setBackground({ color = state.bg, transparent = false }) {
   updateInfo();
 }
 
-// Clicking the colour swatch selects colour fill (and opens the native picker, which has a hex field).
-bgPicker.addEventListener('click', () => { if (state.keepAlpha) setBackground({}); });
+// While transparent is selected, a click on the colour swatch only switches back to colour fill;
+// a further click (or a double-click) opens the native picker, which has a hex field.
+bgPicker.addEventListener('click', (e) => {
+  if (!state.keepAlpha) return;
+  e.preventDefault();
+  setBackground({});
+});
 bgPicker.addEventListener('input', () => setBackground({ color: bgPicker.value.toLowerCase() }));
 bgTransparent.addEventListener('click', () => setBackground({ transparent: true }));
 
