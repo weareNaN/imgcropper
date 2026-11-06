@@ -16,25 +16,33 @@ The browser sends the cropped JPEG to `api/upload.php`. That script signs the re
 1. Copy `api/config.example.php` to `api/config.php` and fill in:
    - `cloud_name`, `api_key`, `api_secret`: from Cloudinary Console → Settings → API Keys.
    - `folder`: the Media Library folder for uploads, or `''` for the root.
-   - `access_key`: a long random string. Generate one with `php -r 'echo bin2hex(random_bytes(24));'`.
-     The app must send this key, which stops anyone else from using your endpoint to upload to your account.
-2. Upload the whole folder to your hosting, `api/config.php` included.
-3. Open the app, click **⚙ Settings**, and paste the access key. Leave the endpoint as `api/upload.php`.
-   The key is saved in that browser's localStorage.
+   - Optionally, `rate_limit_per_hour` (default 60 uploads per IP) and `max_bytes`.
+2. Upload the whole folder to your hosting, `api/config.php` included. That's it: the app needs no login or setup.
 
 Uploaded files are named after the original file, plus a random suffix to keep them unique, for example `my-photo-1280w_ab12cd.jpg`. Existing files are never overwritten.
 
-### Security notes
+### Security
 
+There is no password. `upload.php` uses layered checks instead, so the endpoint can't be abused for much beyond what the app itself does:
+
+- **Same site only.** The request's `Origin` (or `Referer`) must be the site hosting the app. This stops other websites from using your endpoint through their visitors' browsers.
+- **A custom header is required** (`X-Requested-With: imgcropper`). Browsers can't send it from another site unless the server approves, and it only does so for `allowed_origin`.
+- **Per-IP rate limit:** 60 uploads an hour by default. Counters are stored in `api/.ratelimit/`, which blocks web access to itself.
+- **Strict uploads:** only JPEGs at most 1280px wide and 10 MB, which is exactly what the app produces. All Cloudinary options (folder, naming, no overwriting) are fixed on the server, and the API secret never leaves it.
+- **Kept out of search engines** with `noindex` (meta tag and `X-Robots-Tag` header) and a `robots.txt` that disallows everything.
+
+Someone who finds the URL and scripts requests with `curl` can fake the first two checks. They would still be limited to small JPEGs, at the rate limit, into your folder. For a tool on an obscure host that's a reasonable trade-off. If you ever need more, put the site behind your host's password protection (HTTP basic auth); your browser then remembers the login.
+
+Other notes:
 - `api/.htaccess` blocks direct access to `config.php` on Apache. Even without it, requesting `config.php` returns an empty page, because PHP runs the file rather than displaying it.
-- To be extra safe, you can move `config.php` outside your web root and change the `$configFile` path at the top of `upload.php`.
+- To be extra safe, you can move `config.php` outside your web root and change the `$configFile` path in `upload.php`.
 - `api/.user.ini` raises PHP's upload limit to 16 MB, because the default 2 MB can be too small for very tall crops. Most hosts honour this file. If yours doesn't, set `upload_max_filesize` in your hosting control panel.
 
 ### Backend on a different domain
 
 If the app and `upload.php` are on different domains, do two things:
 - Set `allowed_origin` in `config.php` to the app's origin, for example `https://cropper.example.com`.
-- Enter the full endpoint URL in ⚙ Settings, for example `https://myhost.com/cropper/api/upload.php`.
+- Set `UPLOAD_ENDPOINT` near the top of `app.js` to the full URL, for example `https://myhost.com/cropper/api/upload.php`.
 
 ## 2. Run locally
 

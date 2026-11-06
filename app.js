@@ -7,20 +7,19 @@ const PREVIEW_MAX_EDGE = 2560;   // longest edge of the on-screen preview bitmap
 const MAX_CANVAS_AREA = 16_000_000; // stay below Safari's ~16.7MP canvas limit
 const MIN_CROP_DISPLAY_PX = 16;  // minimum crop size, in screen pixels
 const HISTORY_MAX = 12;
-const LS = { settings: 'cropper.backend', ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
+const LS = { ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), dropzone = $('dropzone'), frame = $('frame'), previewCanvas = $('preview');
 const cropEl = $('crop'), shadeEl = $('shade'), busy = $('busy'), busyText = $('busyText'), dragOverlay = $('dragOverlay');
-const fileInput = $('fileInput'), newBtn = $('newBtn'), settingsBtn = $('settingsBtn');
+const fileInput = $('fileInput'), newBtn = $('newBtn');
 const ratiosEl = $('ratios'), customRow = $('customRow'), customW = $('customW'), customH = $('customH'), swapBtn = $('swapBtn');
 const dimColor = $('dimColor'), colorWarn = $('colorWarn');
 const dimSource = $('dimSource'), dimCrop = $('dimCrop'), dimOut = $('dimOut'), dimWarn = $('dimWarn');
 const uploadBtn = $('uploadBtn'), downloadBtn = $('downloadBtn'), progress = $('progress'), progressBar = $('progressBar');
 const statusEl = $('status'), resultEl = $('result'), resultUrl = $('resultUrl'), copyBtn = $('copyBtn'), openLink = $('openLink');
 const historyPanel = $('historyPanel'), historyEl = $('history');
-const settingsDlg = $('settings'), settingsForm = $('settingsForm'), cfgEndpoint = $('cfgEndpoint'), cfgKey = $('cfgKey');
 
 // ---------- State ----------
 const state = {
@@ -66,12 +65,10 @@ function setStatus(text, kind = '') {
   statusEl.className = 'small' + (kind ? ' ' + kind : '');
 }
 
-const DEFAULT_ENDPOINT = 'api/upload.php';
-function getSettings() {
-  let s = {};
-  try { s = JSON.parse(localStorage.getItem(LS.settings)) || {}; } catch {}
-  return { endpoint: s.endpoint || DEFAULT_ENDPOINT, key: s.key || '' };
-}
+// PHP backend that signs and forwards uploads to Cloudinary. Relative = same site as the app.
+// If you host the backend on another domain, put its full URL here and set allowed_origin in api/config.php.
+const UPLOAD_ENDPOINT = 'api/upload.php';
+localStorage.removeItem('cropper.backend'); // settings from older versions (access key) are no longer used
 
 // ---------- Decoding & colour management ----------
 // Every file first goes through decode-worker.js, which reads the embedded ICC profile.
@@ -481,7 +478,8 @@ function endDrag() {
 }
 frame.addEventListener('pointerup', endDrag);
 frame.addEventListener('pointercancel', endDrag);
-cropEl.addEventListener('dblclick', maximizeCrop);
+// Listen on the frame: pointer capture (set on pointerdown) retargets click/dblclick to it.
+frame.addEventListener('dblclick', maximizeCrop);
 
 // Arrow keys nudge the crop (1 screen px, or 10 with Shift).
 window.addEventListener('keydown', (e) => {
@@ -590,22 +588,24 @@ downloadBtn.addEventListener('click', async () => {
 });
 
 // ---------- Upload (via the PHP backend, which signs and forwards to Cloudinary) ----------
-function uploadToBackend(blob, name, settings, onProgress) {
+function uploadToBackend(blob, name, onProgress) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append('file', blob, name);
 
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', settings.endpoint);
-    xhr.setRequestHeader('X-Upload-Key', settings.key);
+    xhr.open('POST', UPLOAD_ENDPOINT);
+    // Required by the backend. A custom header can't be sent cross-site without CORS approval,
+    // so other websites can't use the endpoint through a visitor's browser.
+    xhr.setRequestHeader('X-Requested-With', 'imgcropper');
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
     xhr.onload = () => {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status >= 200 && xhr.status < 300 && data && data.url) resolve(data);
       else if (data && data.error) reject(new Error(data.error));
-      else if (xhr.status === 404) reject(new Error(`Upload endpoint not found: ${settings.endpoint}`));
-      else reject(new Error(`Upload failed (HTTP ${xhr.status}). Is PHP running at ${settings.endpoint}?`));
+      else if (xhr.status === 404) reject(new Error(`Upload endpoint not found: ${UPLOAD_ENDPOINT}`));
+      else reject(new Error(`Upload failed (HTTP ${xhr.status}). Is PHP running at ${UPLOAD_ENDPOINT}?`));
     };
     xhr.onerror = () => reject(new Error('Network error while uploading (or a CORS problem if the backend is on another domain).'));
     xhr.send(fd);
@@ -622,12 +622,6 @@ async function copyToClipboard(text) {
 
 async function upload() {
   if (uploadBtn.disabled) return;
-  const settings = getSettings();
-  if (!settings.key) {
-    openSettings();
-    setStatus('Enter your upload access key first.', 'error');
-    return;
-  }
   resultEl.hidden = true;
   setStatus('');
   setBusy('Rendering…');
@@ -641,7 +635,7 @@ async function upload() {
     progressBar.style.width = '0%';
     setStatus(`Uploading ${(blob.size / 1024).toFixed(0)} KB…`);
 
-    const data = await uploadToBackend(blob, outputName(w), settings, (f) => { progressBar.style.width = (f * 100).toFixed(1) + '%'; });
+    const data = await uploadToBackend(blob, outputName(w), (f) => { progressBar.style.width = (f * 100).toFixed(1) + '%'; });
     const url = data.url;
 
     resultUrl.value = url;
@@ -713,23 +707,4 @@ function renderHistory() {
 }
 renderHistory();
 
-// ---------- Settings ----------
-function openSettings() {
-  const s = getSettings();
-  cfgEndpoint.value = s.endpoint;
-  cfgKey.value = s.key;
-  settingsDlg.showModal();
-}
-settingsBtn.addEventListener('click', openSettings);
-settingsForm.addEventListener('submit', (e) => {
-  if (e.submitter && e.submitter.value === 'save') {
-    localStorage.setItem(LS.settings, JSON.stringify({
-      endpoint: cfgEndpoint.value.trim() || DEFAULT_ENDPOINT,
-      key: cfgKey.value.trim(),
-    }));
-    setStatus('Settings saved.', 'ok');
-  }
-});
-
-if (!getSettings().key) setStatus('Tip: open ⚙ Settings and enter your upload access key.');
 updateInfo();

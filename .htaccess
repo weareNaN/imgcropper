@@ -1,2 +1,7 @@
 # Serve WebAssembly with the right MIME type (needed for fast colour-profile conversion).
 AddType application/wasm .wasm
+
+# Keep this private tool out of search engines.
+<IfModule mod_headers.c>
+    Header set X-Robots-Tag "noindex, nofollow"
+</IfModule>
