@@ -2,3 +2,14 @@
 <FilesMatch "^config(\.example)?\.php$">
     Require all denied
 </FilesMatch>
+
+# Upload size: hosts running PHP as an Apache module ignore .user.ini but honour these.
+# (Wrapped in IfModule so PHP-FPM/CGI hosts, where php_value would cause a 500 error, skip them.)
+<IfModule mod_php.c>
+    php_value post_max_size 20M
+    php_value upload_max_filesize 16M
+</IfModule>
+<IfModule mod_php7.c>
+    php_value post_max_size 20M
+    php_value upload_max_filesize 16M
+</IfModule>

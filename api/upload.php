@@ -3,7 +3,10 @@
  * Receives the cropped JPEG from the web app and uploads it to Cloudinary
  * using a signed request (the API secret never leaves the server).
  *
- * Request:  POST multipart/form-data, field "file", header "X-Requested-With: imgcropper"
+ * Request:  POST with the raw image as the body (Content-Type image/jpeg or image/png),
+ *           headers "X-Requested-With: imgcropper" and "X-Filename: <url-encoded name>".
+ *           A raw body (not multipart) avoids PHP's upload_max_filesize (2 MB by default on many
+ *           hosts); only post_max_size (8 MB by default) applies.
  * Response: JSON { url, width, height, bytes, public_id } or { error } with a 4xx/5xx status.
  *
  * There is no password. Instead, layered checks make the endpoint useless for anything
@@ -19,6 +22,9 @@
  */
 
 declare(strict_types=1);
+
+// Never print PHP warnings into the JSON response (the app reads the body as JSON).
+ini_set('display_errors', '0');
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -98,7 +104,7 @@ if ($allowedOrigin !== '' && $origin === $allowedOrigin) {
     header('Access-Control-Allow-Origin: ' . $allowedOrigin);
     header('Vary: Origin');
     header('Access-Control-Allow-Methods: POST, OPTIONS');
-    header('Access-Control-Allow-Headers: X-Requested-With');
+    header('Access-Control-Allow-Headers: X-Requested-With, X-Filename, Content-Type');
     header('Access-Control-Max-Age: 86400');
 }
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
@@ -125,25 +131,37 @@ if (rateLimited((string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), (int) ($config[
 }
 
 // --- 4: validate upload ---
-if (empty($_FILES['file'])) {
-    // Happens when the body exceeds PHP's post_max_size: PHP silently drops it.
-    respond(413, ['error' => 'No file received (it may exceed the server\'s post_max_size / upload_max_filesize).']);
-}
-$file = $_FILES['file'];
-if ($file['error'] !== UPLOAD_ERR_OK) {
-    $msg = [
-        UPLOAD_ERR_INI_SIZE  => 'File exceeds upload_max_filesize on the server.',
-        UPLOAD_ERR_FORM_SIZE => 'File is too large.',
-        UPLOAD_ERR_PARTIAL   => 'File was only partially uploaded.',
-        UPLOAD_ERR_NO_FILE   => 'No file was uploaded.',
-    ][$file['error']] ?? 'Upload error (code ' . $file['error'] . ').';
-    respond(400, ['error' => $msg]);
-}
 $maxBytes = (int) ($config['max_bytes'] ?? 9 * 1024 * 1024);
-if ($file['size'] > $maxBytes) {
-    respond(413, ['error' => sprintf('File is too large (max %s MB).', round($maxBytes / 1048576, 1))]);
+$maxMb = round($maxBytes / 1048576, 1);
+$declared = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+if ($declared > $maxBytes) {
+    respond(413, ['error' => "File is too large (max $maxMb MB)."]);
 }
-$info = @getimagesize($file['tmp_name']);
+
+// Stream the body to a temp file (never more than max_bytes + 1).
+$tmpDir = is_writable(sys_get_temp_dir()) ? sys_get_temp_dir() : __DIR__;
+$tmpPath = @tempnam($tmpDir, 'crop');
+if ($tmpPath === false) {
+    respond(500, ['error' => 'Server cannot create a temporary file.']);
+}
+register_shutdown_function(fn() => @unlink($tmpPath));
+$in = fopen('php://input', 'rb');
+$out = fopen($tmpPath, 'wb');
+$size = ($in && $out) ? (int) stream_copy_to_stream($in, $out, $maxBytes + 1) : 0;
+if ($in) fclose($in);
+if ($out) fclose($out);
+
+if ($size === 0) {
+    // PHP discards bodies larger than post_max_size before this script runs.
+    $postMax = (string) ini_get('post_max_size');
+    respond(413, ['error' => $declared > 0
+        ? "The server's PHP post_max_size ($postMax) is smaller than this file. Raise post_max_size in your hosting's PHP settings."
+        : 'No image received.']);
+}
+if ($size > $maxBytes) {
+    respond(413, ['error' => "File is too large (max $maxMb MB)."]);
+}
+$info = @getimagesize($tmpPath);
 // JPEG normally; PNG when the user keeps transparency.
 if ($info === false || !in_array($info[2], [IMAGETYPE_JPEG, IMAGETYPE_PNG], true)) {
     respond(415, ['error' => 'Only JPEG or PNG images are accepted.']);
@@ -155,7 +173,7 @@ if ($info[0] < 1 || $info[0] > 1280 || $info[1] < 1 || $info[1] > 16000) {
 
 // --- Build signed Cloudinary request ---
 // Filename → public_id base (Cloudinary appends a random suffix via unique_filename).
-$name = pathinfo((string) $file['name'], PATHINFO_FILENAME);
+$name = pathinfo(rawurldecode((string) ($_SERVER['HTTP_X_FILENAME'] ?? 'image')), PATHINFO_FILENAME);
 $name = trim(preg_replace('/[^A-Za-z0-9_-]+/', '-', $name) ?? '', '-');
 if ($name === '') {
     $name = 'image';
@@ -177,7 +195,7 @@ ksort($params);
 $toSign = implode('&', array_map(fn($k, $v) => "$k=$v", array_keys($params), $params));
 $params['signature'] = sha1($toSign . $config['api_secret']);
 $params['api_key']   = $config['api_key'];
-$params['file']      = new CURLFile($file['tmp_name'], $info['mime'], $name . ($info[2] === IMAGETYPE_PNG ? '.png' : '.jpg'));
+$params['file']      = new CURLFile($tmpPath, $info['mime'], $name . ($info[2] === IMAGETYPE_PNG ? '.png' : '.jpg'));
 
 $endpoint = 'https://api.cloudinary.com/v1_1/' . rawurlencode((string) $config['cloud_name']) . '/image/upload';
 $ch = curl_init($endpoint);

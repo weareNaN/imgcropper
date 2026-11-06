@@ -36,7 +36,7 @@ Someone who finds the URL and scripts requests with `curl` can fake the first tw
 Other notes:
 - `api/.htaccess` blocks direct access to `config.php` on Apache. Even without it, requesting `config.php` returns an empty page, because PHP runs the file rather than displaying it.
 - To be extra safe, you can move `config.php` outside your web root and change the `$configFile` path in `upload.php`.
-- `api/.user.ini` raises PHP's upload limit to 16 MB, because the default 2 MB can be too small for very tall crops. Most hosts honour this file. If yours doesn't, set `upload_max_filesize` in your hosting control panel.
+- Upload size limits: the app sends the image as the raw request body (not a form upload), so PHP's `upload_max_filesize` (often 2 MB on shared hosts) doesn't apply. As backups, `api/.user.ini` (PHP-FPM/CGI hosts) and `api/.htaccess` (Apache mod_php hosts) raise `post_max_size` to 20 MB. If you ever see an "HTTP 413" error, the web server itself has a request size cap (for example nginx's `client_max_body_size`, 1 MB by default), which only your host can raise.
 
 ### Backend on a different domain
 
