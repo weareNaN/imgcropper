@@ -85,7 +85,7 @@ The sidebar's **Colour** row shows what was detected, for example "Adobe RGB (19
 ## Notes and limits
 
 - Downscaling is done in successive halvings on canvas for clean, alias-free results.
-- EXIF orientation (and the TIFF orientation tag) is applied automatically. Transparency is flattened onto white.
+- EXIF orientation (and the TIFF orientation tag) is applied automatically. Transparent areas are filled with #F9F9F9 by default. A small **Background** row (swatch and hex field) appears under Dimensions only for images with transparency; your choice is remembered, and "reset" returns to #F9F9F9. The preview shows the fill live.
 - TIFF support comes from the bundled [UTIF.js](https://github.com/photopea/UTIF.js): uncompressed, LZW, Deflate, PackBits and JPEG compression; 8- and 16-bit RGB, Gray and CMYK, with or without alpha. Exotic TIFFs (32-bit float, planar CMYK) may not decode or may not be colour-converted; a warning is shown in that case.
 - HEIC and AVIF open only where the browser supports them (HEIC: Safari), and use the browser's colour management.
 - Very large images use a lot of memory (about 4 bytes per pixel, so a 100-megapixel image needs about 400 MB). Desktop browsers handle this fine.

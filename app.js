@@ -7,7 +7,8 @@ const PREVIEW_MAX_EDGE = 2560;   // longest edge of the on-screen preview bitmap
 const MAX_CANVAS_AREA = 16_000_000; // stay below Safari's ~16.7MP canvas limit
 const MIN_CROP_DISPLAY_PX = 16;  // minimum crop size, in screen pixels
 const HISTORY_MAX = 12;
-const LS = { ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
+const DEFAULT_BG = '#f9f9f9'; // fill for transparent pixels (JPEG has no alpha)
+const LS = { bg: 'cropper.bg', ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -16,6 +17,7 @@ const cropEl = $('crop'), shadeEl = $('shade'), busy = $('busy'), busyText = $('
 const fileInput = $('fileInput'), newBtn = $('newBtn');
 const ratiosEl = $('ratios'), customRow = $('customRow'), customW = $('customW'), customH = $('customH'), swapBtn = $('swapBtn');
 const dimColor = $('dimColor'), colorWarn = $('colorWarn');
+const bgLabel = $('bgLabel'), bgRow = $('bgRow'), bgPicker = $('bgPicker'), bgHex = $('bgHex'), bgReset = $('bgReset');
 const dimSource = $('dimSource'), dimCrop = $('dimCrop'), dimOut = $('dimOut'), dimWarn = $('dimWarn');
 const uploadBtn = $('uploadBtn'), downloadBtn = $('downloadBtn'), progress = $('progress'), progressBar = $('progressBar');
 const statusEl = $('status'), resultEl = $('result'), resultUrl = $('resultUrl'), copyBtn = $('copyBtn'), openLink = $('openLink');
@@ -23,6 +25,9 @@ const historyPanel = $('historyPanel'), historyEl = $('history');
 
 // ---------- State ----------
 const state = {
+  bg: /^#[0-9a-f]{6}$/.test(localStorage.getItem('cropper.bg') || '') ? localStorage.getItem('cropper.bg') : DEFAULT_BG,
+  hasAlpha: false,
+  previewRaw: null, // unflattened preview (keeps transparency) so the background can be changed live
   source: null,   // full-resolution ImageBitmap / HTMLImageElement
   W: 0, H: 0,     // source size
   fileName: '',
@@ -137,15 +142,15 @@ const sizeOf = (src) => ({ w: src.naturalWidth || src.width, h: src.naturalHeigh
 // ---------- High-quality resampling ----------
 // Draws a region of `src` into a dw×dh canvas. Large reductions are done in successive
 // halvings, which avoids the aliasing/moire that a single big drawImage downscale produces.
-function resample(src, sx, sy, sw, sh, dw, dh) {
+// bg: colour to flatten transparency onto, or null to keep the alpha channel.
+function resample(src, sx, sy, sw, sh, dw, dh, bg = null) {
   let w = dw, h = dh;
   while (w * 2 <= sw && h * 2 <= sh && (w * 2) * (h * 2) <= MAX_CANVAS_AREA) { w *= 2; h *= 2; }
 
   let canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   let ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
-  ctx.fillStyle = '#fff'; // flatten transparency onto white (JPEG output)
-  ctx.fillRect(0, 0, w, h);
+  if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h); }
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
@@ -163,6 +168,42 @@ function resample(src, sx, sy, sw, sh, dw, dh) {
   }
   return canvas;
 }
+
+// ---------- Transparency / background ----------
+// The preview is a downscale of the whole image, so any transparent area (even a few
+// pixels, which average into a partly transparent preview pixel) shows up as alpha < 255.
+function hasTransparency(canvas) {
+  const d = canvas.getContext('2d', { colorSpace: 'srgb' }).getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 255) return true;
+  return false;
+}
+
+function renderPreview() {
+  if (!state.previewRaw) return;
+  const ctx = previewCanvas.getContext('2d', { colorSpace: 'srgb' });
+  ctx.fillStyle = state.bg;
+  ctx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+  ctx.drawImage(state.previewRaw, 0, 0);
+  bgLabel.hidden = bgRow.hidden = !state.hasAlpha;
+  bgPicker.value = state.bg;
+  bgHex.value = state.bg.toUpperCase();
+  bgReset.hidden = state.bg === DEFAULT_BG;
+}
+
+function setBackground(hex) {
+  hex = hex.trim().toLowerCase();
+  if (/^#?[0-9a-f]{3}$/.test(hex)) hex = hex.replace(/^#?(.)(.)(.)$/, '#$1$1$2$2$3$3');
+  if (/^[0-9a-f]{6}$/.test(hex)) hex = '#' + hex;
+  if (!/^#[0-9a-f]{6}$/.test(hex)) { bgHex.value = state.bg.toUpperCase(); return; } // invalid: revert
+  state.bg = hex;
+  if (hex === DEFAULT_BG) localStorage.removeItem(LS.bg); else localStorage.setItem(LS.bg, hex);
+  renderPreview();
+}
+
+bgPicker.addEventListener('input', () => setBackground(bgPicker.value));
+bgHex.addEventListener('change', () => setBackground(bgHex.value));
+bgHex.addEventListener('keydown', (e) => { if (e.key === 'Enter') bgHex.blur(); });
+bgReset.addEventListener('click', () => setBackground(DEFAULT_BG));
 
 // ---------- Loading an image ----------
 async function openFile(file) {
@@ -189,10 +230,11 @@ async function openFile(file) {
     await new Promise(requestAnimationFrame);
     const s = Math.min(1, PREVIEW_MAX_EDGE / Math.max(w, h));
     const pw = Math.max(1, Math.round(w * s)), ph = Math.max(1, Math.round(h * s));
-    const pv = resample(src, 0, 0, w, h, pw, ph);
+    if (state.previewRaw) state.previewRaw.width = state.previewRaw.height = 0;
+    state.previewRaw = resample(src, 0, 0, w, h, pw, ph, null);
+    state.hasAlpha = hasTransparency(state.previewRaw);
     previewCanvas.width = pw; previewCanvas.height = ph;
-    previewCanvas.getContext('2d', { colorSpace: 'srgb' }).drawImage(pv, 0, 0);
-    pv.width = pv.height = 0;
+    renderPreview();
 
     dropzone.hidden = true;
     frame.hidden = false;
@@ -211,6 +253,10 @@ async function openFile(file) {
 function resetToDropzone() {
   if (state.source && state.source.close) state.source.close();
   state.source = null;
+  if (state.previewRaw) state.previewRaw.width = state.previewRaw.height = 0;
+  state.previewRaw = null;
+  state.hasAlpha = false;
+  bgLabel.hidden = bgRow.hidden = true;
   frame.hidden = true;
   dropzone.hidden = false;
   newBtn.hidden = true;
@@ -521,7 +567,7 @@ window.addEventListener('paste', (e) => {
 // ---------- Export ----------
 async function renderOutput() {
   const o = outputRect();
-  const canvas = resample(state.source, o.cx, o.cy, o.cw, o.ch, o.ow, o.oh);
+  const canvas = resample(state.source, o.cx, o.cy, o.cw, o.ch, o.ow, o.oh, state.bg);
   const blob = await new Promise((res, rej) =>
     canvas.toBlob((b) => (b ? res(b) : rej(new Error('JPEG encoding failed'))), 'image/jpeg', JPEG_QUALITY));
   canvas.width = canvas.height = 0;
