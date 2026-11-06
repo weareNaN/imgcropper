@@ -3,10 +3,10 @@
  * Receives the cropped image (JPEG, or PNG when transparency is kept) from the web app and uploads it to Cloudinary
  * using a signed request (the API secret never leaves the server).
  *
- * Request:  POST with the raw image as the body (Content-Type image/jpeg or image/png),
- *           headers "X-Requested-With: imgcropper" and "X-Filename: <url-encoded name>".
- *           A raw body (not multipart) avoids PHP's upload_max_filesize (2 MB by default on many
- *           hosts); only post_max_size (8 MB by default) applies.
+ * Request:  POST multipart/form-data with the image in field "file" (a raw image body is also
+ *           accepted), headers "X-Requested-With: imgcropper" and "X-Filename: <url-encoded name>".
+ *           Multipart is used because host WAFs (mod_security/Imunify) often block raw binary
+ *           bodies; api/.user.ini and api/.htaccess raise upload_max_filesize/post_max_size.
  * Response: JSON { url, width, height, bytes, public_id } or { error } with a 4xx/5xx status.
  *
  * There is no password. Instead, layered checks make the endpoint useless for anything
@@ -156,23 +156,40 @@ if (rateLimited((string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), (int) ($config[
 $maxBytes = (int) ($config['max_bytes'] ?? 9 * 1024 * 1024);
 $maxMb = round($maxBytes / 1048576, 1);
 $declared = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
-if ($declared > $maxBytes) {
+if ($declared > $maxBytes + 65536) { // small allowance for multipart framing
     respond(413, ['error' => "File is too large (max $maxMb MB)."]);
 }
 
-// Stream the body to a temp file (never more than max_bytes + 1).
-// System temp dir, or else the private folder (never the public api/ folder itself).
-$tmpDir = is_writable(sys_get_temp_dir()) ? sys_get_temp_dir() : privateDir();
-$tmpPath = $tmpDir !== null ? @tempnam($tmpDir, 'crop') : false;
-if ($tmpPath === false) {
-    respond(500, ['error' => 'Server cannot create a temporary file.']);
+if (isset($_FILES['file'])) {
+    // multipart/form-data (what the app sends: host WAFs often block raw binary bodies).
+    $f = $_FILES['file'];
+    if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        $limit = (string) ini_get('upload_max_filesize');
+        respond(in_array($f['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true) ? 413 : 400, ['error' =>
+            $f['error'] === UPLOAD_ERR_INI_SIZE
+                ? "The server's PHP upload_max_filesize ($limit) is smaller than this file. Raise it in your hosting's PHP settings."
+                : 'Upload failed (PHP upload error ' . (int) $f['error'] . ').']);
+    }
+    if (!is_uploaded_file($f['tmp_name'])) {
+        respond(400, ['error' => 'No image received.']);
+    }
+    $tmpPath = $f['tmp_name']; // PHP deletes it after the request
+    $size = (int) filesize($tmpPath);
+} else {
+    // Raw request body. Stream it to a temp file (never more than max_bytes + 1).
+    // System temp dir, or else the private folder (never the public api/ folder itself).
+    $tmpDir = is_writable(sys_get_temp_dir()) ? sys_get_temp_dir() : privateDir();
+    $tmpPath = $tmpDir !== null ? @tempnam($tmpDir, 'crop') : false;
+    if ($tmpPath === false) {
+        respond(500, ['error' => 'Server cannot create a temporary file.']);
+    }
+    register_shutdown_function(fn() => @unlink($tmpPath));
+    $in = fopen('php://input', 'rb');
+    $out = fopen($tmpPath, 'wb');
+    $size = ($in && $out) ? (int) stream_copy_to_stream($in, $out, $maxBytes + 1) : 0;
+    if ($in) fclose($in);
+    if ($out) fclose($out);
 }
-register_shutdown_function(fn() => @unlink($tmpPath));
-$in = fopen('php://input', 'rb');
-$out = fopen($tmpPath, 'wb');
-$size = ($in && $out) ? (int) stream_copy_to_stream($in, $out, $maxBytes + 1) : 0;
-if ($in) fclose($in);
-if ($out) fclose($out);
 
 if ($size === 0) {
     // PHP discards bodies larger than post_max_size before this script runs.

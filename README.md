@@ -37,7 +37,7 @@ Other notes:
 - On Apache, the root `.htaccess` hides dotfiles and dot-folders (`.git`, `.htaccess`, `api/.ratelimit`, …) and `.md` files, so uploading the whole project folder doesn't expose them.
 - `api/.htaccess` blocks direct access to `config.php` on Apache. Even without it, requesting `config.php` returns an empty page, because PHP runs the file rather than displaying it.
 - To be extra safe, you can move `config.php` outside your web root and change the `$configFile` path in `upload.php`.
-- Upload size limits: the app sends the image as the raw request body (not a form upload), so PHP's `upload_max_filesize` (often 2 MB on shared hosts) doesn't apply. As backups, `api/.user.ini` (PHP-FPM/CGI hosts) and `api/.htaccess` (Apache mod_php hosts) raise `post_max_size` to 20 MB. If you ever see an "HTTP 413" error, the web server itself has a request size cap (for example nginx's `client_max_body_size`, 1 MB by default), which only your host can raise.
+- Upload format and size limits: the app sends the image as a multipart file upload. (A raw binary request body would avoid PHP's `upload_max_filesize`, but shared-host firewalls such as mod_security or Imunify360 often block those with HTTP 418 or 403.) `api/.user.ini` (PHP-FPM/CGI hosts) and `api/.htaccess` (Apache mod_php hosts) raise `upload_max_filesize` to 16 MB and `post_max_size` to 20 MB. If an upload error mentions `upload_max_filesize`, those overrides aren't being applied, so raise the limit in your host's PHP settings. If you ever see an "HTTP 413" error, the web server itself has a request size cap (for example nginx's `client_max_body_size`, 1 MB by default), which only your host can raise.
 
 ### Backend on a different domain
 

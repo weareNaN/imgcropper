@@ -777,11 +777,13 @@ downloadBtn.addEventListener('click', async () => {
 // ---------- Upload (via the PHP backend, which signs and forwards to Cloudinary) ----------
 function uploadToBackend(blob, name, onProgress) {
   return new Promise((resolve, reject) => {
-    // The image is sent as the raw request body (not multipart/form-data), which sidesteps PHP's
-    // upload_max_filesize limit (often 2 MB on shared hosting).
+    // Sent as multipart/form-data. A raw binary body would avoid PHP's upload_max_filesize, but host
+    // WAFs (mod_security/Imunify) often reject raw binary POST bodies (seen as HTTP 418/403);
+    // multipart file uploads pass. api/.user.ini and api/.htaccess raise upload_max_filesize.
+    const form = new FormData();
+    form.append('file', blob, name);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', UPLOAD_ENDPOINT);
-    xhr.setRequestHeader('Content-Type', blob.type);
     xhr.setRequestHeader('X-Filename', encodeURIComponent(name));
     // Required by the backend. A custom header can't be sent cross-site without CORS approval,
     // so other websites can't use the endpoint through a visitor's browser.
@@ -798,10 +800,11 @@ function uploadToBackend(blob, name, onProgress) {
       else if (data && data.error) reject(new Error(data.error));
       else if (xhr.status === 404) reject(new Error(`Upload endpoint not found: ${UPLOAD_ENDPOINT}`));
       else if (xhr.status === 413) reject(new Error('The web server rejected the file as too large (HTTP 413). Ask your host to raise the request size limit (e.g. nginx client_max_body_size or Apache LimitRequestBody) to at least 10 MB.'));
+      else if (xhr.status === 418 || xhr.status === 406) reject(new Error(`The host's firewall (mod_security) blocked the upload (HTTP ${xhr.status}). Ask your host to whitelist ${UPLOAD_ENDPOINT}.`));
       else reject(new Error(`Upload failed (HTTP ${xhr.status}). Is PHP running at ${UPLOAD_ENDPOINT}?`));
     };
     xhr.onerror = () => reject(new Error('Network error while uploading (or a CORS problem if the backend is on another domain).'));
-    xhr.send(blob);
+    xhr.send(form);
   });
 }
 
