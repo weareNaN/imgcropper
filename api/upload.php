@@ -139,9 +139,9 @@ if ($file['error'] !== UPLOAD_ERR_OK) {
     ][$file['error']] ?? 'Upload error (code ' . $file['error'] . ').';
     respond(400, ['error' => $msg]);
 }
-$maxBytes = (int) ($config['max_bytes'] ?? 10 * 1024 * 1024);
+$maxBytes = (int) ($config['max_bytes'] ?? 9 * 1024 * 1024);
 if ($file['size'] > $maxBytes) {
-    respond(413, ['error' => 'File is too large.']);
+    respond(413, ['error' => sprintf('File is too large (max %s MB).', round($maxBytes / 1048576, 1))]);
 }
 $info = @getimagesize($file['tmp_name']);
 // JPEG normally; PNG when the user keeps transparency.

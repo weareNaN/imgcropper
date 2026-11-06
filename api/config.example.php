@@ -19,5 +19,5 @@ return [
     'rate_limit_per_hour' => 60,
 
     // Reject uploads larger than this (bytes). The app sends ~0.2–2 MB JPEGs.
-    'max_bytes' => 10 * 1024 * 1024,
+    'max_bytes' => 9 * 1024 * 1024,
 ];

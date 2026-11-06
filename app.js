@@ -3,12 +3,13 @@
 // ---------- Constants ----------
 const MAX_OUT_WIDTH = 1280;      // final width (never upscaled)
 const JPEG_QUALITY = 0.9;
+const MAX_UPLOAD_BYTES = 9 * 1024 * 1024; // keep in sync with max_bytes in api/config.php
 const PREVIEW_MAX_EDGE = 2560;   // longest edge of the on-screen preview bitmap
 const MAX_CANVAS_AREA = 16_000_000; // stay below Safari's ~16.7MP canvas limit
 const MIN_CROP_DISPLAY_PX = 16;  // minimum crop size, in screen pixels
 const HISTORY_MAX = 12;
 const DEFAULT_BG = '#f9f9f9'; // fill for transparent pixels (JPEG has no alpha)
-const LS = { bg: 'cropper.bg', keepAlpha: 'cropper.keepAlpha', ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
+const LS = { ratio: 'cropper.ratio', custom: 'cropper.custom', history: 'cropper.history' };
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -17,8 +18,7 @@ const cropEl = $('crop'), shadeEl = $('shade'), busy = $('busy'), busyText = $('
 const fileInput = $('fileInput'), newBtn = $('newBtn');
 const ratiosEl = $('ratios'), customRow = $('customRow'), customW = $('customW'), customH = $('customH'), swapBtn = $('swapBtn');
 const dimColor = $('dimColor'), colorWarn = $('colorWarn');
-const bgKeep = $('bgKeep'), bgColorControls = $('bgColorControls');
-const bgLabel = $('bgLabel'), bgRow = $('bgRow'), bgPicker = $('bgPicker'), bgHex = $('bgHex'), bgReset = $('bgReset');
+const bgLabel = $('bgLabel'), bgRow = $('bgRow'), bgPicker = $('bgPicker'), bgTransparent = $('bgTransparent');
 const dimSource = $('dimSource'), dimCrop = $('dimCrop'), dimOut = $('dimOut'), dimWarn = $('dimWarn');
 const uploadBtn = $('uploadBtn'), downloadBtn = $('downloadBtn'), progress = $('progress'), progressBar = $('progressBar');
 const statusEl = $('status'), resultEl = $('result'), resultUrl = $('resultUrl'), copyBtn = $('copyBtn'), openLink = $('openLink');
@@ -26,9 +26,10 @@ const historyPanel = $('historyPanel'), historyEl = $('history');
 
 // ---------- State ----------
 const state = {
-  bg: /^#[0-9a-f]{6}$/.test(localStorage.getItem('cropper.bg') || '') ? localStorage.getItem('cropper.bg') : DEFAULT_BG,
+  // Background for transparent pixels. Deliberately not saved: reset for every new image (see openFile).
+  bg: DEFAULT_BG,
   hasAlpha: false,
-  keepAlpha: localStorage.getItem('cropper.keepAlpha') === '1', // export PNG with transparency instead of flattening
+  keepAlpha: false, // true = export PNG with transparency instead of flattening onto bg
   previewRaw: null, // unflattened preview (keeps transparency) so the background can be changed live
   source: null,   // full-resolution ImageBitmap / HTMLImageElement
   W: 0, H: 0,     // source size
@@ -190,33 +191,25 @@ function renderPreview() {
   }
   ctx.drawImage(state.previewRaw, 0, 0);
   bgLabel.hidden = bgRow.hidden = !state.hasAlpha;
-  bgKeep.checked = state.keepAlpha;
-  bgColorControls.hidden = state.keepAlpha;
   bgPicker.value = state.bg;
-  bgHex.value = state.bg.toUpperCase();
-  bgReset.hidden = state.bg === DEFAULT_BG;
+  bgPicker.title = `Fill with ${state.bg.toUpperCase()} (JPEG). Click to change.`;
+  bgPicker.classList.toggle('selected', !state.keepAlpha);
+  bgTransparent.classList.toggle('selected', state.keepAlpha);
+  bgTransparent.setAttribute('aria-pressed', String(state.keepAlpha));
 }
 
-function setBackground(hex) {
-  hex = hex.trim().toLowerCase();
-  if (/^#?[0-9a-f]{3}$/.test(hex)) hex = hex.replace(/^#?(.)(.)(.)$/, '#$1$1$2$2$3$3');
-  if (/^[0-9a-f]{6}$/.test(hex)) hex = '#' + hex;
-  if (!/^#[0-9a-f]{6}$/.test(hex)) { bgHex.value = state.bg.toUpperCase(); return; } // invalid: revert
-  state.bg = hex;
-  if (hex === DEFAULT_BG) localStorage.removeItem(LS.bg); else localStorage.setItem(LS.bg, hex);
-  renderPreview();
-}
-
-bgPicker.addEventListener('input', () => setBackground(bgPicker.value));
-bgHex.addEventListener('change', () => setBackground(bgHex.value));
-bgHex.addEventListener('keydown', (e) => { if (e.key === 'Enter') bgHex.blur(); });
-bgReset.addEventListener('click', () => setBackground(DEFAULT_BG));
-bgKeep.addEventListener('change', () => {
-  state.keepAlpha = bgKeep.checked;
-  if (state.keepAlpha) localStorage.setItem(LS.keepAlpha, '1'); else localStorage.removeItem(LS.keepAlpha);
+function setBackground({ color = state.bg, transparent = false }) {
+  state.bg = color;
+  state.keepAlpha = transparent;
   renderPreview();
   updateInfo();
-});
+}
+
+// Clicking the colour swatch selects colour fill (and opens the native picker, which has a hex field).
+bgPicker.addEventListener('click', () => { if (state.keepAlpha) setBackground({}); });
+bgPicker.addEventListener('input', () => setBackground({ color: bgPicker.value.toLowerCase() }));
+bgTransparent.addEventListener('click', () => setBackground({ transparent: true }));
+localStorage.removeItem('cropper.bg'); localStorage.removeItem('cropper.keepAlpha'); // saved by older versions
 
 // Transparent output only when the image actually has transparency and the user asked for it.
 const transparentOutput = () => state.hasAlpha && state.keepAlpha;
@@ -249,6 +242,8 @@ async function openFile(file) {
     if (state.previewRaw) state.previewRaw.width = state.previewRaw.height = 0;
     state.previewRaw = resample(src, 0, 0, w, h, pw, ph, null);
     state.hasAlpha = hasTransparency(state.previewRaw);
+    state.bg = DEFAULT_BG; // background choice is per image: every new image starts at #F9F9F9, opaque
+    state.keepAlpha = false;
     previewCanvas.width = pw; previewCanvas.height = ph;
     renderPreview();
 
@@ -369,6 +364,7 @@ function updateButtons() {
   const ready = !!state.source && !state.busy;
   uploadBtn.disabled = !ready;
   downloadBtn.disabled = !ready;
+  downloadBtn.textContent = `Download ${transparentOutput() ? 'PNG' : 'JPEG'} instead`;
 }
 
 new ResizeObserver(layout).observe(stage);
@@ -726,6 +722,10 @@ async function upload() {
   try {
     await new Promise(requestAnimationFrame);
     const { blob, w, h, ext } = await renderOutput();
+    if (blob.size > MAX_UPLOAD_BYTES) {
+      throw new Error(`The ${ext.toUpperCase()} is ${(blob.size / 1048576).toFixed(1)} MB, over the ${MAX_UPLOAD_BYTES / 1048576} MB upload limit.`
+        + (ext === 'png' ? ' Try a colour background (JPEG) instead of transparency, or a shorter crop.' : ' Try a shorter crop.'));
+    }
     setBusy(null);
     uploadBtn.disabled = downloadBtn.disabled = true;
     state.busy = true;

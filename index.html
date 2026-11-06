@@ -76,14 +76,9 @@
           <dt>Colour</dt><dd id="dimColor" title="">—</dd>
           <dt id="bgLabel" hidden>Background</dt>
           <dd id="bgRow" class="bg-row" hidden>
-            <span id="bgColorControls" class="bg-row" title="Fill colour for transparent areas (output is JPEG)">
-              <button id="bgReset" class="link" title="Reset to #F9F9F9" hidden>reset</button>
-              <input id="bgHex" type="text" maxlength="7" spellcheck="false" aria-label="Background colour hex" />
-              <input id="bgPicker" type="color" aria-label="Background colour" />
-            </span>
-            <label class="bg-keep" title="Keep transparency: output is a PNG instead of a JPEG (larger files)">
-              <input id="bgKeep" type="checkbox" /> transparent
-            </label>
+            <input id="bgPicker" class="swatch" type="color" aria-label="Background colour" />
+            <button id="bgTransparent" class="swatch checker" aria-pressed="false" aria-label="Keep transparency"
+              title="Keep transparency (PNG, larger file)"></button>
           </dd>
         </dl>
         <p id="colorWarn" class="warn small" hidden></p>
