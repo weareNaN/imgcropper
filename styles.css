@@ -253,6 +253,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .dims dt { color: var(--muted); }
 .dims dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 #dimOut { font-weight: 600; }
+#dimColor { overflow-wrap: anywhere; }
+#dimColor.converted { color: var(--ok); }
 
 /* Upload */
 .progress {

@@ -1,0 +1,2 @@
+# Serve WebAssembly with the right MIME type (needed for fast colour-profile conversion).
+AddType application/wasm .wasm

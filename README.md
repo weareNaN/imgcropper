@@ -56,17 +56,42 @@ PHP's built-in server serves both the app and the API. Note that the TIFF decode
 | Maximize crop | Double-click the box |
 | Upload | Button, or ⌘/Ctrl + Enter |
 
+## Colour management
+
+Marketing files often carry wide-gamut or print profiles: Adobe RGB, ProPhoto, Display P3, CMYK, Gray, often at 16 bits. Shown or emailed without proper conversion, they look washed out or shift in colour. Email clients often ignore embedded profiles, so the only safe output is **pixels converted to sRGB, with the file also tagged as sRGB**. That's what the app produces:
+
+1. `decode-worker.js` reads the embedded ICC profile from JPEG, PNG, TIFF and WebP files.
+2. If the profile isn't sRGB, the worker decodes the raw pixel values itself and converts them to sRGB with **LittleCMS**, the colour engine used by GIMP, ImageMagick and Krita. It uses relative colorimetric intent with black point compensation, which is Photoshop's default for "Convert to Profile". This gives the same result in every browser instead of depending on each browser's colour handling, and it covers TIFFs, which browsers don't colour-manage at all.
+3. Untagged and sRGB files skip the conversion, because every browser and email client already treats them as sRGB.
+4. Every exported JPEG has a compact sRGB v2 ICC profile embedded (456 bytes), replacing whatever the browser would otherwise write.
+
+The sidebar's **Colour** row shows what was detected, for example "Adobe RGB (1998) → sRGB". A warning appears when exact conversion isn't possible:
+- **CMYK files without an embedded profile:** colours are approximate, so ask for a version with a profile, or one converted to sRGB.
+- **A profile that doesn't match the image data**, such as a CMYK profile on an RGB image: the profile is ignored.
+- **Rare JPEG variants** (arithmetic-coded, 12-bit, lossless): these fall back to the browser's own colour management, which is correct in Chrome, Edge and Safari.
+
+**Accuracy test:** test images in sRGB, Adobe RGB, ProPhoto, Display P3, Generic CMYK and Gray Gamma 2.2 were used, as 8- and 16-bit JPEG, PNG and TIFF (both byte orders, with and without alpha). Each output was compared with ImageMagick/LittleCMS reference conversions, and all were within 2 levels out of 255 after cropping and resizing to 1280px. Before this change, TIFFs were off by up to 169 levels.
+
+**Speed:** converting a 48-megapixel image takes about 2 s for Adobe RGB JPEG, about 4 s for 16-bit ProPhoto TIFF and about 7 s for CMYK JPEG. Files that need no conversion open at native browser speed.
+
 ## Notes and limits
 
 - Downscaling is done in successive halvings on canvas for clean, alias-free results.
-- EXIF orientation is applied automatically. Transparency is flattened onto white.
-- TIFFs are decoded natively in Safari. Other browsers use the bundled [UTIF.js](https://github.com/photopea/UTIF.js) (uncompressed, LZW, Deflate, PackBits, and JPEG-compressed TIFFs, 8- and 16-bit RGB/grayscale). Exotic TIFFs (some CMYK and 32-bit float files) may not decode.
-- HEIC opens only in Safari.
+- EXIF orientation (and the TIFF orientation tag) is applied automatically. Transparency is flattened onto white.
+- TIFF support comes from the bundled [UTIF.js](https://github.com/photopea/UTIF.js): uncompressed, LZW, Deflate, PackBits and JPEG compression; 8- and 16-bit RGB, Gray and CMYK, with or without alpha. Exotic TIFFs (32-bit float, planar CMYK) may not decode or may not be colour-converted; a warning is shown in that case.
+- HEIC and AVIF open only where the browser supports them (HEIC: Safari), and use the browser's colour management.
 - Very large images use a lot of memory (about 4 bytes per pixel, so a 100-megapixel image needs about 400 MB). Desktop browsers handle this fine.
+- If you serve the app from Apache, the root `.htaccess` makes sure `.wasm` files get the right MIME type.
 
 ## Files
 
 - `index.html`, `styles.css`, and `app.js`: the app
+- `decode-worker.js`: reads ICC profiles, decodes files and converts them to sRGB (runs off the main thread)
 - `api/upload.php`: the signed upload endpoint. `api/config.example.php` is the config template.
-- `tiff-worker.js`: decodes TIFFs off the main thread
-- `vendor/`: UTIF.js 3.1.0 and pako 1.0.11 (inflate only), bundled so no CDN is needed
+- `vendor/`: bundled libraries, so no CDN is needed:
+  - `lcms.js` and `lcms.wasm`: LittleCMS 2.16 compiled to WebAssembly ([lcms-wasm](https://github.com/mattdesl/lcms-wasm) 1.0.5, MIT)
+  - `jpeg-decoder.js`: [jpeg-js](https://github.com/jpeg-js/jpeg-js) 0.4.4 decoder (BSD-3-Clause). Patched to expose raw CMYK/RGB samples and to round instead of truncate.
+  - `UTIF.js`: [UTIF.js](https://github.com/photopea/UTIF.js) 3.1.0 (MIT)
+  - `UPNG.js`: [UPNG.js](https://github.com/photopea/UPNG.js) 2.1.0 (MIT). Patched to run in a worker.
+  - `pako_inflate.min.js`: [pako](https://github.com/nodeca/pako) 1.0.11 inflate (MIT)
+  - `sRGB-v2-micro.icc`: compact sRGB profile from [Compact-ICC-Profiles](https://github.com/saucecontrol/Compact-ICC-Profiles) (CC0)

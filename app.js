@@ -15,6 +15,7 @@ const stage = $('stage'), dropzone = $('dropzone'), frame = $('frame'), previewC
 const cropEl = $('crop'), shadeEl = $('shade'), busy = $('busy'), busyText = $('busyText'), dragOverlay = $('dragOverlay');
 const fileInput = $('fileInput'), newBtn = $('newBtn'), settingsBtn = $('settingsBtn');
 const ratiosEl = $('ratios'), customRow = $('customRow'), customW = $('customW'), customH = $('customH'), swapBtn = $('swapBtn');
+const dimColor = $('dimColor'), colorWarn = $('colorWarn');
 const dimSource = $('dimSource'), dimCrop = $('dimCrop'), dimOut = $('dimOut'), dimWarn = $('dimWarn');
 const uploadBtn = $('uploadBtn'), downloadBtn = $('downloadBtn'), progress = $('progress'), progressBar = $('progressBar');
 const statusEl = $('status'), resultEl = $('result'), resultUrl = $('resultUrl'), copyBtn = $('copyBtn'), openLink = $('openLink');
@@ -72,26 +73,28 @@ function getSettings() {
   return { endpoint: s.endpoint || DEFAULT_ENDPOINT, key: s.key || '' };
 }
 
-// ---------- Decoding ----------
+// ---------- Decoding & colour management ----------
+// Every file first goes through decode-worker.js, which reads the embedded ICC profile.
+// Non-sRGB files (Adobe RGB, ProPhoto, P3, CMYK, Gray…) and all TIFFs are decoded there and
+// converted to sRGB with LittleCMS. Untagged/sRGB files come back as 'browser' and use the
+// fast native decoder. From then on everything (preview, canvas, export) is sRGB.
 function isTiff(file) {
   return file.type === 'image/tiff' || /\.tiff?$/i.test(file.name);
 }
 
-function decodeTiffInWorker(file) {
+function analyzeInWorker(file) {
   return new Promise(async (resolve, reject) => {
-    const worker = new Worker('tiff-worker.js');
-    worker.onmessage = async (e) => {
+    const worker = new Worker('decode-worker.js', { type: 'module' });
+    worker.onmessage = (e) => {
+      if (e.data.stage) { busyText.textContent = e.data.stage; return; } // progress update
       worker.terminate();
-      const { error, width, height, data } = e.data;
-      if (error) return reject(new Error('TIFF decode failed: ' + error));
-      try {
-        const imageData = new ImageData(new Uint8ClampedArray(data), width, height);
-        resolve(await createImageBitmap(imageData));
-      } catch (err) { reject(err); }
+      e.data.error ? reject(new Error(e.data.error)) : resolve(e.data);
     };
-    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'TIFF worker failed')); };
-    const buf = await file.arrayBuffer();
-    worker.postMessage(buf, [buf]);
+    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'Decoder failed to load')); };
+    try {
+      const buffer = await file.arrayBuffer();
+      worker.postMessage({ buffer, name: file.name, type: file.type }, [buffer]);
+    } catch (err) { worker.terminate(); reject(err); }
   });
 }
 
@@ -106,14 +109,30 @@ function decodeViaImgElement(file) {
   });
 }
 
-async function decodeFile(file) {
-  // createImageBitmap decodes off the main thread and applies EXIF orientation.
+async function decodeNative(file) {
+  // Browser decode: applies EXIF orientation and converts any embedded profile to sRGB.
   try {
-    return await createImageBitmap(file, { imageOrientation: 'from-image' });
-  } catch (e) {
-    if (isTiff(file)) return decodeTiffInWorker(file);
+    return await createImageBitmap(file, { imageOrientation: 'from-image', colorSpaceConversion: 'default' });
+  } catch {
     return decodeViaImgElement(file);
   }
+}
+
+async function decodeFile(file) {
+  let res;
+  try {
+    res = await analyzeInWorker(file);
+  } catch (err) {
+    if (isTiff(file)) throw new Error('TIFF decode failed: ' + err.message);
+    console.warn('[color] worker failed, using browser decoding', err);
+    return { src: await decodeNative(file), color: { profile: null, converted: false,
+      warning: `Couldn't read this file's colour profile (${err.message}). The browser's own colour handling was used.` } };
+  }
+  if (res.kind === 'pixels') {
+    const imageData = new ImageData(new Uint8ClampedArray(res.data), res.width, res.height); // sRGB
+    return { src: await createImageBitmap(imageData), color: res.color };
+  }
+  return { src: await decodeNative(file), color: res.color };
 }
 
 const sizeOf = (src) => ({ w: src.naturalWidth || src.width, h: src.naturalHeight || src.height });
@@ -127,7 +146,7 @@ function resample(src, sx, sy, sw, sh, dw, dh) {
 
   let canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
-  let ctx = canvas.getContext('2d');
+  let ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
   ctx.fillStyle = '#fff'; // flatten transparency onto white (JPEG output)
   ctx.fillRect(0, 0, w, h);
   ctx.imageSmoothingEnabled = true;
@@ -138,7 +157,7 @@ function resample(src, sx, sy, sw, sh, dw, dh) {
     const nw = w / 2, nh = h / 2;
     const next = document.createElement('canvas');
     next.width = nw; next.height = nh;
-    const nctx = next.getContext('2d');
+    const nctx = next.getContext('2d', { colorSpace: 'srgb' });
     nctx.imageSmoothingEnabled = true;
     nctx.imageSmoothingQuality = 'high';
     nctx.drawImage(canvas, 0, 0, w, h, 0, 0, nw, nh);
@@ -159,13 +178,14 @@ async function openFile(file) {
   resultEl.hidden = true;
   setBusy(`Decoding ${file.name} (${(file.size / 1048576).toFixed(1)} MB)…`);
   try {
-    const src = await decodeFile(file);
+    const { src, color } = await decodeFile(file);
     const { w, h } = sizeOf(src);
     if (!w || !h) throw new Error('Image has no dimensions.');
 
     if (state.source && state.source.close) state.source.close();
     state.source = src;
     state.W = w; state.H = h;
+    state.color = color;
     state.fileName = file.name.replace(/\.[^.]+$/, '');
 
     setBusy('Preparing preview…');
@@ -174,7 +194,7 @@ async function openFile(file) {
     const pw = Math.max(1, Math.round(w * s)), ph = Math.max(1, Math.round(h * s));
     const pv = resample(src, 0, 0, w, h, pw, ph);
     previewCanvas.width = pw; previewCanvas.height = ph;
-    previewCanvas.getContext('2d').drawImage(pv, 0, 0);
+    previewCanvas.getContext('2d', { colorSpace: 'srgb' }).drawImage(pv, 0, 0);
     pv.width = pv.height = 0;
 
     dropzone.hidden = true;
@@ -243,8 +263,9 @@ function outputRect() {
 
 function updateInfo() {
   if (!state.source) {
-    dimSource.textContent = dimCrop.textContent = dimOut.textContent = '—';
-    dimWarn.hidden = true;
+    dimSource.textContent = dimCrop.textContent = dimOut.textContent = dimColor.textContent = '—';
+    dimColor.className = '';
+    dimWarn.hidden = colorWarn.hidden = true;
     updateButtons();
     return;
   }
@@ -252,6 +273,7 @@ function updateInfo() {
   dimSource.textContent = `${state.W} × ${state.H}`;
   dimCrop.textContent = `${o.cw} × ${o.ch}`;
   dimOut.textContent = `${o.ow} × ${o.oh}`;
+  renderColorInfo();
   if (o.cw < MAX_OUT_WIDTH) {
     dimWarn.hidden = false;
     dimWarn.textContent = `Crop is narrower than ${MAX_OUT_WIDTH}px, so the output keeps its ${o.cw}px width (no upscaling).`;
@@ -259,6 +281,29 @@ function updateInfo() {
     dimWarn.hidden = true;
   }
   updateButtons();
+}
+
+function renderColorInfo() {
+  const c = state.color || {};
+  let text, title;
+  if (c.converted) {
+    text = `${c.profile} → sRGB`;
+    title = `Embedded profile "${c.profile}" (${c.space}) was converted to sRGB. The upload is tagged sRGB.`;
+  } else if (c.profile) {
+    text = c.profile;
+    title = 'Already sRGB: no conversion needed. The upload is tagged sRGB.';
+  } else if (c.space === 'CMYK') {
+    text = 'No profile (CMYK)';
+    title = 'CMYK without an embedded profile: converted with a generic formula, colours are approximate.';
+  } else {
+    text = 'No profile (sRGB)';
+    title = 'No embedded profile: treated as sRGB, like every browser and email client does.';
+  }
+  dimColor.textContent = text;
+  dimColor.title = title;
+  dimColor.className = c.converted ? 'converted' : '';
+  colorWarn.hidden = !c.warning;
+  colorWarn.textContent = c.warning || '';
 }
 
 function updateButtons() {
@@ -482,7 +527,43 @@ async function renderOutput() {
   const blob = await new Promise((res, rej) =>
     canvas.toBlob((b) => (b ? res(b) : rej(new Error('JPEG encoding failed'))), 'image/jpeg', JPEG_QUALITY));
   canvas.width = canvas.height = 0;
-  return { blob, w: o.ow, h: o.oh };
+  return { blob: await tagAsSRGB(blob), w: o.ow, h: o.oh };
+}
+
+// Pixels are already sRGB; this embeds a compact sRGB v2 ICC profile so every viewer reads
+// them as sRGB. Browsers differ here (Chrome embeds its own profile, others may embed nothing),
+// so any existing ICC segment is replaced to make the output identical everywhere.
+let srgbIccPromise = null;
+async function tagAsSRGB(blob) {
+  srgbIccPromise ||= fetch('vendor/sRGB-v2-micro.icc').then((r) => {
+    if (!r.ok) throw new Error('sRGB profile missing');
+    return r.arrayBuffer();
+  });
+  let icc;
+  try { icc = new Uint8Array(await srgbIccPromise); }
+  catch (err) { srgbIccPromise = null; console.warn('[color] could not load sRGB profile; uploading untagged (still sRGB)', err); return blob; }
+
+  const jpg = new Uint8Array(await blob.arrayBuffer());
+  if (jpg[0] !== 0xFF || jpg[1] !== 0xD8) return blob;
+  const keep = [];
+  let i = 2, insertAt = 0; // default: right after SOI
+  while (i + 4 <= jpg.length && jpg[i] === 0xFF) {
+    const marker = jpg[i + 1];
+    if (marker === 0xDA) break; // start of scan: everything after is image data
+    const len = (jpg[i + 2] << 8) | jpg[i + 3];
+    const isIcc = marker === 0xE2 && String.fromCharCode(...jpg.subarray(i + 4, i + 15)) === 'ICC_PROFILE';
+    if (!isIcc) keep.push(jpg.subarray(i, i + 2 + len));
+    if (marker === 0xE0) insertAt = keep.length; // after JFIF APP0
+    i += 2 + len;
+  }
+  const segLen = 2 + 12 + 2 + icc.length;
+  const app2 = new Uint8Array(2 + segLen);
+  app2.set([0xFF, 0xE2, segLen >> 8, segLen & 0xFF]);
+  app2.set(new TextEncoder().encode('ICC_PROFILE\0'), 4);
+  app2.set([1, 1], 16); // chunk 1 of 1
+  app2.set(icc, 18);
+  keep.splice(insertAt, 0, app2);
+  return new Blob([jpg.subarray(0, 2), ...keep, jpg.subarray(i)], { type: 'image/jpeg' });
 }
 
 function outputName(w) {
