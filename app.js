@@ -10,6 +10,15 @@ const MIN_CROP_DISPLAY_PX = 16;  // minimum crop size, in screen pixels
 const HISTORY_MAX = 12;
 const DEFAULT_BG = '#f9f9f9'; // fill for transparent pixels (JPEG has no alpha)
 const LS = { ratio: 'cropper.ratio', history: 'cropper.history' };
+const MAX_OUT_HEIGHT = 16000; // keep in sync with the height check in api/upload.php
+
+// localStorage can throw (storage disabled, strict privacy modes). Preferences are optional,
+// so failures are ignored instead of breaking the app.
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  remove(...keys) { try { keys.forEach((k) => localStorage.removeItem(k)); } catch {} },
+};
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -35,6 +44,7 @@ const state = {
   source: null,   // full-resolution ImageBitmap / HTMLImageElement
   W: 0, H: 0,     // source size
   fileName: '',
+  color: null,    // colour-profile info from the decoder (shown in the Colour row)
   crop: { x: 0, y: 0, w: 0, h: 0 }, // in source pixels
   anchor: null, // last manual selection, see rememberSelection()
   ratio: loadRatio(), // null = Free (unlocked), or { w, h } = locked ratio (a preset or anything typed)
@@ -54,12 +64,12 @@ function parseRatio(text) {
 
 // Saved as 'free' or 'w:h'. Older versions saved 'custom' + a separate custom ratio.
 function loadRatio() {
-  let saved = localStorage.getItem('cropper.ratio');
+  let saved = store.get(LS.ratio);
   if (saved === 'custom') {
-    try { const c = JSON.parse(localStorage.getItem('cropper.custom')); saved = `${c.w}:${c.h}`; } catch { saved = null; }
-    if (saved) localStorage.setItem('cropper.ratio', saved); else localStorage.removeItem('cropper.ratio');
+    try { const c = JSON.parse(store.get('cropper.custom')); saved = `${c.w}:${c.h}`; } catch { saved = null; }
+    if (saved) store.set(LS.ratio, saved); else store.remove(LS.ratio);
   }
-  localStorage.removeItem('cropper.custom');
+  store.remove('cropper.custom');
   const r = parseRatio(saved);
   return r === undefined ? { w: 4, h: 5 } : r;
 }
@@ -83,7 +93,8 @@ function setStatus(text, kind = '') {
 // PHP backend that signs and forwards uploads to Cloudinary. Relative = same site as the app.
 // If you host the backend on another domain, put its full URL here and set allowed_origin in api/config.php.
 const UPLOAD_ENDPOINT = 'api/upload.php';
-localStorage.removeItem('cropper.backend'); // settings from older versions (access key) are no longer used
+// Settings saved by older versions (access key, background) are no longer used.
+store.remove('cropper.backend', 'cropper.bg', 'cropper.keepAlpha');
 
 // ---------- Decoding & colour management ----------
 // Every file first goes through decode-worker.js, which reads the embedded ICC profile.
@@ -115,7 +126,8 @@ function decodeViaImgElement(file) {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.decoding = 'async';
-    img.onload = () => { img.decode().catch(() => {}).finally(() => resolve(img)); };
+    // Once decoded, the image stays usable for drawing, so the object URL can be released.
+    img.onload = () => { img.decode().catch(() => {}).finally(() => { URL.revokeObjectURL(url); resolve(img); }); };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('This browser cannot decode this image format.')); };
     img.src = url;
   });
@@ -216,14 +228,14 @@ function setBackground({ color = state.bg, transparent = false }) {
 bgPicker.addEventListener('click', () => { if (state.keepAlpha) setBackground({}); });
 bgPicker.addEventListener('input', () => setBackground({ color: bgPicker.value.toLowerCase() }));
 bgTransparent.addEventListener('click', () => setBackground({ transparent: true }));
-localStorage.removeItem('cropper.bg'); localStorage.removeItem('cropper.keepAlpha'); // saved by older versions
 
 // Transparent output only when the image actually has transparency and the user asked for it.
 const transparentOutput = () => state.hasAlpha && state.keepAlpha;
 
 // ---------- Loading an image ----------
 async function openFile(file) {
-  if (!file || state.busy) return;
+  if (!file) return;
+  if (state.busy) { setStatus('Busy, try again in a moment.', 'error'); return; }
   if (!file.type.startsWith('image/') && !/\.(tiff?|heic|heif|avif|jpe?g|png|webp|gif|bmp)$/i.test(file.name)) {
     setStatus('That doesn’t look like an image file.', 'error');
     return;
@@ -269,6 +281,7 @@ async function openFile(file) {
 }
 
 function resetToDropzone() {
+  if (state.busy) return; // don't pull the image away while it's being rendered or uploaded
   if (state.source && state.source.close) state.source.close();
   state.source = null;
   if (state.previewRaw) state.previewRaw.width = state.previewRaw.height = 0;
@@ -280,7 +293,6 @@ function resetToDropzone() {
   newBtn.hidden = true;
   resultEl.hidden = true;
   setStatus('');
-  fileInput.value = '';
   updateInfo();
 }
 
@@ -398,7 +410,7 @@ function renderRatioButtons() {
 
 function setRatio(ratio) {
   state.ratio = ratio;
-  localStorage.setItem(LS.ratio, ratio ? `${ratio.w}:${ratio.h}` : 'free');
+  store.set(LS.ratio, ratio ? `${ratio.w}:${ratio.h}` : 'free');
   renderRatioButtons();
   applyRatio();
 }
@@ -628,7 +640,11 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------- File input / drag & drop / paste ----------
-fileInput.addEventListener('change', () => openFile(fileInput.files[0]));
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  fileInput.value = ''; // so choosing the same file again still triggers 'change'
+  openFile(file);
+});
 newBtn.addEventListener('click', resetToDropzone);
 
 let dragDepth = 0;
@@ -652,6 +668,10 @@ window.addEventListener('paste', (e) => {
 // ---------- Export ----------
 async function renderOutput() {
   const o = outputRect();
+  const maxH = Math.min(MAX_OUT_HEIGHT, Math.floor(MAX_CANVAS_AREA / o.ow));
+  if (o.oh > maxH) {
+    throw new Error(`This crop is too tall: the output would be ${o.ow} × ${o.oh} px (max height ${maxH} px). Make the crop less tall.`);
+  }
   const png = transparentOutput();
   const canvas = resample(state.source, o.cx, o.cy, o.cw, o.ch, o.ow, o.oh, png ? null : state.bg);
   const type = png ? 'image/png' : 'image/jpeg';
@@ -788,8 +808,13 @@ function uploadToBackend(blob, name, onProgress) {
 async function copyToClipboard(text) {
   try { await navigator.clipboard.writeText(text); return true; }
   catch {
-    resultUrl.select();
-    try { return document.execCommand('copy'); } catch { return false; }
+    // Fallback for browsers/contexts without the async clipboard API: copy from a temporary field.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.append(ta);
+    ta.select();
+    try { return document.execCommand('copy'); } catch { return false; } finally { ta.remove(); }
   }
 }
 
@@ -813,7 +838,8 @@ async function upload() {
     setStatus(`Uploading ${(blob.size / 1024).toFixed(0)} KB…`);
 
     const data = await uploadToBackend(blob, outputName(w, ext), (f) => { progressBar.style.width = (f * 100).toFixed(1) + '%'; });
-    const url = data.url;
+    const url = String(data.url);
+    if (!/^https:\/\//i.test(url)) throw new Error('Unexpected response from the upload server.');
 
     resultUrl.value = url;
     openLink.href = url;
@@ -841,11 +867,11 @@ resultUrl.addEventListener('focus', () => resultUrl.select());
 
 // ---------- History ----------
 function getHistory() {
-  try { return JSON.parse(localStorage.getItem(LS.history)) || []; } catch { return []; }
+  try { return JSON.parse(store.get(LS.history)) || []; } catch { return []; }
 }
 function addHistory(item) {
   const list = [item, ...getHistory().filter((i) => i.url !== item.url)].slice(0, HISTORY_MAX);
-  localStorage.setItem(LS.history, JSON.stringify(list));
+  store.set(LS.history, JSON.stringify(list));
   renderHistory();
 }
 function thumbUrl(url) {

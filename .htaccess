@@ -5,3 +5,11 @@ AddType application/wasm .wasm
 <IfModule mod_headers.c>
     Header set X-Robots-Tag "noindex, nofollow"
 </IfModule>
+
+# Never serve hidden files/folders (.git, .htaccess, api/.ratelimit, …) or project docs.
+<IfModule mod_alias.c>
+    RedirectMatch 404 "/\.(?!well-known/)"
+</IfModule>
+<FilesMatch "\.md$">
+    Require all denied
+</FilesMatch>

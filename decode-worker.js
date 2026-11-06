@@ -143,6 +143,11 @@ function exifOrientation(exif) {
 
 const ascii = (u8, start, len) => String.fromCharCode(...u8.subarray(start, start + len));
 
+// The ArrayBuffer behind u8, without copying when u8 already spans all of it (always the case
+// here, since u8 wraps the transferred file buffer). Avoids duplicating 100+ MB files.
+const bufferOf = (u8) => (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength
+  ? u8.buffer : u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength));
+
 function scanJpeg(u8) {
   const iccParts = [];
   let exif = null, components = 0, i = 2;
@@ -259,7 +264,7 @@ async function handlePng(u8) {
     return { kind: 'browser', color: { profile: prof.name, space: prof.space, converted: false, warning: `Unsupported PNG profile colour space (${prof.space}); it was ignored.` } };
   }
   self.postMessage({ stage: 'Decoding PNG…' });
-  const img = self.UPNG.decode(u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength));
+  const img = self.UPNG.decode(bufferOf(u8));
   const w = img.width, h = img.height;
 
   // 16-bit Gray/GrayA/RGB/RGBA: feed the raw big-endian samples to LittleCMS (full precision).
@@ -291,7 +296,7 @@ async function handleWebp(u8) {
 }
 
 async function handleTiff(u8) {
-  const buf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+  const buf = bufferOf(u8);
   const ifds = self.UTIF.decode(buf);
 
   // A TIFF can hold several images (thumbnails, layers, sub-IFDs). Use the largest one.

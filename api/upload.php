@@ -1,6 +1,6 @@
 <?php
 /**
- * Receives the cropped JPEG from the web app and uploads it to Cloudinary
+ * Receives the cropped image (JPEG, or PNG when transparency is kept) from the web app and uploads it to Cloudinary
  * using a signed request (the API secret never leaves the server).
  *
  * Request:  POST with the raw image as the body (Content-Type image/jpeg or image/png),
@@ -33,8 +33,23 @@ header('X-Robots-Tag: noindex, nofollow');
 function respond(int $status, array $body): void
 {
     http_response_code($status);
-    echo json_encode($body, JSON_UNESCAPED_SLASHES);
+    if ($status !== 204) { // 204 responses must not have a body
+        echo json_encode($body, JSON_UNESCAPED_SLASHES);
+    }
     exit;
+}
+
+/** Private working folder next to this script (web access denied by its own .htaccess). */
+function privateDir(): ?string
+{
+    $dir = __DIR__ . '/.ratelimit';
+    if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+        return null;
+    }
+    if (!is_file("$dir/.htaccess")) {
+        @file_put_contents("$dir/.htaccess", "Require all denied\n");
+    }
+    return $dir;
 }
 
 /** "host[:port]" the request came from, from Origin or (fallback) Referer; '' if unknown. */
@@ -58,12 +73,17 @@ function rateLimited(string $ip, int $limit, int $window = 3600): bool
     if ($limit <= 0) {
         return false;
     }
-    $dir = __DIR__ . '/.ratelimit';
-    if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+    $dir = privateDir();
+    if ($dir === null) {
         return false;
     }
-    if (!is_file("$dir/.htaccess")) {
-        @file_put_contents("$dir/.htaccess", "Require all denied\n");
+    // Occasionally delete counters of IPs that haven't been seen for a while.
+    if (mt_rand(1, 100) === 1) {
+        foreach (glob("$dir/*.json") ?: [] as $f) {
+            if (@filemtime($f) < time() - $window) {
+                @unlink($f);
+            }
+        }
     }
     $fh = @fopen($dir . '/' . hash('sha256', $ip) . '.json', 'c+');
     if (!$fh) {
@@ -121,7 +141,9 @@ $allowedHost = $allowedOrigin !== '' ? strtolower((string) (parse_url($allowedOr
 $source = requestSourceHost();
 $sameSite = $source !== '' && ($source === $ownHost || ($allowedHost !== '' && $source === $allowedHost));
 if (!$sameSite || ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'imgcropper') {
-    respond(403, ['error' => 'Forbidden.']);
+    // The hint helps a legitimate setup behind a proxy/other domain; it gives an attacker nothing new.
+    respond(403, ['error' => 'Forbidden: the request did not come from this site. If the app is served from another domain '
+        . 'or behind a proxy, set allowed_origin in api/config.php.']);
 }
 
 // --- 3: rate limit ---
@@ -139,8 +161,9 @@ if ($declared > $maxBytes) {
 }
 
 // Stream the body to a temp file (never more than max_bytes + 1).
-$tmpDir = is_writable(sys_get_temp_dir()) ? sys_get_temp_dir() : __DIR__;
-$tmpPath = @tempnam($tmpDir, 'crop');
+// System temp dir, or else the private folder (never the public api/ folder itself).
+$tmpDir = is_writable(sys_get_temp_dir()) ? sys_get_temp_dir() : privateDir();
+$tmpPath = $tmpDir !== null ? @tempnam($tmpDir, 'crop') : false;
 if ($tmpPath === false) {
     respond(500, ['error' => 'Server cannot create a temporary file.']);
 }
@@ -174,7 +197,7 @@ if ($info[0] < 1 || $info[0] > 1280 || $info[1] < 1 || $info[1] > 16000) {
 // --- Build signed Cloudinary request ---
 // Filename → public_id base (Cloudinary appends a random suffix via unique_filename).
 $name = pathinfo(rawurldecode((string) ($_SERVER['HTTP_X_FILENAME'] ?? 'image')), PATHINFO_FILENAME);
-$name = trim(preg_replace('/[^A-Za-z0-9_-]+/', '-', $name) ?? '', '-');
+$name = trim(substr(preg_replace('/[^A-Za-z0-9_-]+/', '-', $name) ?? '', 0, 100), '-'); // Cloudinary ids max 255 chars
 if ($name === '') {
     $name = 'image';
 }

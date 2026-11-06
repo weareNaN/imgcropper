@@ -34,6 +34,7 @@ There is no password. `upload.php` uses layered checks instead, so the endpoint 
 Someone who finds the URL and scripts requests with `curl` can fake the first two checks. They would still be limited to small JPEGs, at the rate limit, into your folder. For a tool on an obscure host that's a reasonable trade-off. If you ever need more, put the site behind your host's password protection (HTTP basic auth); your browser then remembers the login.
 
 Other notes:
+- On Apache, the root `.htaccess` hides dotfiles and dot-folders (`.git`, `.htaccess`, `api/.ratelimit`, …) and `.md` files, so uploading the whole project folder doesn't expose them.
 - `api/.htaccess` blocks direct access to `config.php` on Apache. Even without it, requesting `config.php` returns an empty page, because PHP runs the file rather than displaying it.
 - To be extra safe, you can move `config.php` outside your web root and change the `$configFile` path in `upload.php`.
 - Upload size limits: the app sends the image as the raw request body (not a form upload), so PHP's `upload_max_filesize` (often 2 MB on shared hosts) doesn't apply. As backups, `api/.user.ini` (PHP-FPM/CGI hosts) and `api/.htaccess` (Apache mod_php hosts) raise `post_max_size` to 20 MB. If you ever see an "HTTP 413" error, the web server itself has a request size cap (for example nginx's `client_max_body_size`, 1 MB by default), which only your host can raise.
